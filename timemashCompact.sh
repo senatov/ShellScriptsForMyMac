@@ -1,96 +1,71 @@
 #!/bin/bash
 
-# Лог-файл в правильной директории
+# Лог-файл
 LOG_FILE="/var/log/time_machine_cleanup.log"
-exec > >(tee -i $LOG_FILE)
-exec 2>&1
-
-BACKUP_DRIVE="/Volumes/TimeMachine" # Укажите путь к вашему диску Time Machine
-
-echo "=== Очистка Time Machine начата ==="
 
 # Проверка root-доступа
 if [ "$EUID" -ne 0 ]; then
-    echo "Для выполнения скрипта требуются права администратора. Запустите с sudo."
-    exit 1
+    echo "Скрипт требует прав администратора. Перезапуск с sudo..."
+    exec sudo "$0" "$@"
 fi
 
-# Проверка и создание лог-файла, если его нет
-if [ ! -f "$LOG_FILE" ]; then
-    touch "$LOG_FILE" || { echo "Ошибка создания лог-файла: $LOG_FILE. Проверьте права."; exit 1; }
-    chmod 640 "$LOG_FILE" || echo "Ошибка изменения прав на лог-файл."
-fi
+exec > >(sudo tee -i $LOG_FILE)
+exec 2>&1
 
-# Получение свободного места на диске
-get_free_space() {
-    df -h "$1" | awk 'NR==2 {print $4}'
-}
-
-# Информация о дисковом пространстве до начала работы
-FREE_SPACE_BEFORE=$(get_free_space "$BACKUP_DRIVE")
-echo "Свободное место на диске $BACKUP_DRIVE до работы: $FREE_SPACE_BEFORE"
-
+BACKUP_DRIVE="/Volumes/MAC_BACKUP" # Укажите путь к вашему диску
 CURRENT_DATE=$(date +%s)
 WEEK_SECONDS=$((7 * 24 * 60 * 60))
 FIVE_MONTHS_SECONDS=$((5 * 30 * 24 * 60 * 60))
 
+echo "=== Очистка резервных копий начата ==="
+
+# Проверка наличия диска
 if [ ! -d "$BACKUP_DRIVE" ]; then
-    echo "Диск Time Machine не найден по пути $BACKUP_DRIVE. Проверьте подключение."
+    echo "Диск $BACKUP_DRIVE не найден. Завершаем скрипт."
     exit 1
 fi
 
-get_backup_age() {
-    local backup_date=$1
-    local backup_seconds=$(date -j -f "%Y-%m-%d-%H%M%S" "$backup_date" +%s)
-    echo $((CURRENT_DATE - backup_seconds))
+# Получение свободного места
+get_free_space() {
+    df -h "$1" | awk 'NR==2 {print $4}'
 }
 
-BACKUP_LIST=$(tmutil listbackups | grep "$BACKUP_DRIVE")
+# Информация о свободном месте
+FREE_SPACE_BEFORE=$(get_free_space "$BACKUP_DRIVE")
+echo "Свободное место на диске $BACKUP_DRIVE до работы: $FREE_SPACE_BEFORE"
 
-if [ -z "$BACKUP_LIST" ]; then
-    echo "Бэкапы Time Machine не найдены. Завершаем скрипт."
-    exit 0
-fi
+# Перебор директорий вручную
+echo "Ищем резервные копии на $BACKUP_DRIVE..."
+for backup_dir in "$BACKUP_DRIVE"/*; do
+    if [ -d "$backup_dir" ]; then
+        BACKUP_NAME=$(basename "$backup_dir")
+        echo "Обрабатываем $BACKUP_NAME..."
 
-for backup in $BACKUP_LIST; do
-    BACKUP_NAME=$(basename "$backup")
-    BACKUP_DATE=$(echo "$BACKUP_NAME" | grep -oE "[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{6}")
-
-    if [ -z "$BACKUP_DATE" ]; then
-        echo "Не удалось извлечь дату из имени бэкапа: $BACKUP_NAME. Пропускаем."
-        continue
-    fi
-
-    BACKUP_AGE=$(get_backup_age "$BACKUP_DATE")
-
-    if [ "$BACKUP_AGE" -lt "$WEEK_SECONDS" ]; then
-        echo "Бэкап $BACKUP_NAME младше недели. Пропускаем."
-        continue
-    fi
-
-    if [ "$BACKUP_AGE" -gt "$FIVE_MONTHS_SECONDS" ]; then
-        MONTH=$(date -j -f "%Y-%m-%d-%H%M%S" "$BACKUP_DATE" "+%Y-%m")
-        echo "Бэкап $BACKUP_NAME старше 5 месяцев. Помещаем в папку $MONTH."
-
-        if [ ! -d "$BACKUP_DRIVE/$MONTH" ]; then
-            mkdir -p "$BACKUP_DRIVE/$MONTH"
-            cp -r "$backup" "$BACKUP_DRIVE/$MONTH" || echo "Ошибка копирования $BACKUP_NAME в $MONTH."
-        else
-            echo "Помесячный бэкап за $MONTH уже существует. Пропускаем."
+        # Извлечение даты из имени директории
+        BACKUP_DATE=$(echo "$BACKUP_NAME" | grep -oE "[0-9]{4}-[0-9]{2}-[0-9]{2}")
+        if [ -z "$BACKUP_DATE" ]; then
+            echo "Дата не найдена в имени директории. Пропускаем."
+            continue
         fi
 
-        tmutil delete "$backup" || echo "Ошибка удаления бэкапа $BACKUP_NAME."
-        continue
-    fi
+        # Вычисление возраста
+        BACKUP_SECONDS=$(date -j -f "%Y-%m-%d" "$BACKUP_DATE" +%s)
+        BACKUP_AGE=$((CURRENT_DATE - BACKUP_SECONDS))
 
-    echo "Бэкап $BACKUP_NAME старше недели, но младше 5 месяцев. Удаляем."
-    tmutil delete "$backup" || echo "Ошибка удаления бэкапа $BACKUP_NAME."
+        # Удаление или перенос
+        if [ "$BACKUP_AGE" -gt "$FIVE_MONTHS_SECONDS" ]; then
+            echo "Директория $BACKUP_NAME старше 5 месяцев. Удаляем."
+            sudo rm -rf "$backup_dir" || echo "Ошибка при удалении $BACKUP_NAME."
+        elif [ "$BACKUP_AGE" -gt "$WEEK_SECONDS" ]; then
+            echo "Директория $BACKUP_NAME старше недели, но младше 5 месяцев. Пропускаем."
+        else
+            echo "Директория $BACKUP_NAME младше недели. Пропускаем."
+        fi
+    fi
 done
 
-# Информация о дисковом пространстве после завершения работы
+# Информация о свободном месте после работы
 FREE_SPACE_AFTER=$(get_free_space "$BACKUP_DRIVE")
-
-echo -e "\n=== Итоги работы скрипта ==="
 echo "Свободное место на диске $BACKUP_DRIVE до работы: $FREE_SPACE_BEFORE"
 echo "Свободное место на диске $BACKUP_DRIVE после работы: $FREE_SPACE_AFTER"
-echo "================================"
+echo "=================================="

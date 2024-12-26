@@ -1,6 +1,6 @@
 #!/bin/bash
 
-LOG_FILE=~/brew_update.log
+LOG_FILE=/var/log/brew_update.log
 exec > >(tee -i $LOG_FILE)
 exec 2>&1
 
