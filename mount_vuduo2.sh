@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Переменные
-SERVER="smb://root:aaa@Vuduo2/share"  # Замените "share" на имя папки на сервере
+SERVER="smb://root:aaa@http://192.168.178.30/share"  # Замените "share" на имя папки на сервере
 MOUNT_POINT="/Volumes/Vuduo2"        # Точка монтирования
 
 # Создаём папку для монтирования, если её нет
