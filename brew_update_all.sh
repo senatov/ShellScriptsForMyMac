@@ -1,111 +1,110 @@
-#!/bin/bash
+#!/bin/zsh
 
-LOG_FILE=/var/log/brew_update.log
-exec > >(tee -i $LOG_FILE)
-exec 2>&1
+# Log file setup
+LOG_FILE="$HOME/brew_update.log"
+if [[ -f $LOG_FILE && $(du -m "$LOG_FILE" | cut -f1) -gt 100 ]]; then
+    mv "$LOG_FILE" "${LOG_FILE}_$(date +%F-%H%M%S).log"
+fi
+exec > >(tee -i "$LOG_FILE") 2>&1
 
-echo "Запуск обновления Homebrew, очистки системы и обновления шрифтов..."
+echo "Starting full system maintenance with Homebrew under zsh..."
 
-# Запрос root-доступа в начале
-if [ "$EUID" -ne 0 ]; then
-    echo "Для выполнения скрипта требуются права администратора. Введите пароль:"
-    sudo -v || { echo "Ошибка: root-доступ не предоставлен. Скрипт завершён."; exit 1; }
-    echo "Root-доступ успешно предоставлен."
+# Ensure Homebrew is installed
+if ! command -v brew &>/dev/null; then
+    echo "Error: Homebrew is not installed. Please install it first."
+    exit 1
 fi
 
-# Функция для проверки и удаления файла с подтверждением
-check_and_delete() {
-    local file=$1
-    echo "Проверяем файл $file..."
-    if [[ -f $file ]]; then
-        read -p "Удалить файл $file? (y/n): " confirm
-        if [[ $confirm == "y" || $confirm == "Y" ]]; then
-            echo "Удаляем файл $file..."
-            rm -f "$file" || echo "Ошибка: не удалось удалить $file."
-        else
-            echo "Файл $file не удалён."
-        fi
+# Function to update and upgrade Homebrew packages
+update_brew() {
+    echo "Updating Homebrew..."
+    brew update || echo "Error updating Homebrew."
+
+    echo "Upgrading outdated packages..."
+    outdated_packages=$(brew outdated)
+    if [[ -n $outdated_packages ]]; then
+        brew upgrade || echo "Error upgrading packages."
     else
-        echo "Файл $file не найден или не может быть удалён."
+        echo "No outdated packages found."
+    fi
+
+    echo "Cleaning up old versions..."
+    brew cleanup -s || echo "Error during cleanup."
+}
+
+# Function to inspect and clean caches
+clean_caches() {
+    echo "Cleaning user caches..."
+    user_cache=$(find ~/Library/Caches -type f -size +50M)
+    if [[ -n $user_cache ]]; then
+        echo "$user_cache" | xargs rm -f || echo "Error cleaning user cache."
+    else
+        echo "No large files in user cache."
+    fi
+
+    echo "Cleaning system caches..."
+    sudo find /Library/Caches -type f -size +50M -exec rm -f {} + || echo "Error cleaning system cache."
+}
+
+# Function to inspect and remove temporary files
+clean_temp_files() {
+    echo "Cleaning temporary files..."
+    temp_files=$(find /tmp -type f -mtime +7)
+    if [[ -n $temp_files ]]; then
+        echo "$temp_files" | xargs rm -f || echo "Error removing temporary files."
+    else
+        echo "No old temporary files found."
     fi
 }
 
-# Функция для автоматического удаления временных или битых временных файлов
-delete_temp_or_broken_files() {
-    local file=$1
-    if [[ -f $file ]]; then
-        echo "Удаляем временный или битый файл $file..."
-        rm -f "$file" || echo "Ошибка: не удалось удалить $file."
+# Function to find and optionally delete large files
+inspect_large_files() {
+    echo "Inspecting large files (>150MB)..."
+    large_files=$(find ~/ -type f -size +150M -exec du -h {} + | sort -hr | head -n 10)
+    if [[ -n $large_files ]]; then
+        echo "Large files found:"
+        echo "$large_files"
+        echo "Requesting confirmation for deletion..."
+        echo "$large_files" | awk '{print $2}' | while read -r file; do
+            read -p "Delete $file? (y/n): " confirm
+            if [[ $confirm == "y" || $confirm == "Y" ]]; then
+                rm -f "$file" || echo "Error deleting $file."
+            else
+                echo "$file not deleted."
+            fi
+        done
+    else
+        echo "No large files found."
     fi
 }
 
-# Git операции в директории Homebrew
-cd /opt/homebrew || { echo "Ошибка: не удалось перейти в директорию Homebrew."; exit 1; }
-echo "Сохраняем изменения в Git..."
-git stash -u && git clean -d -f || { echo "Ошибка в Git при сохранении изменений."; exit 1; }
+# Function to remove broken symlinks
+remove_broken_symlinks() {
+    echo "Searching for broken symbolic links..."
+    broken_symlinks=$(find / -type l ! -exec test -e {} \; -print 2>/dev/null)
+    if [[ -n $broken_symlinks ]]; then
+        echo "Broken symbolic links found. Removing..."
+        echo "$broken_symlinks" | xargs rm -f || echo "Error removing broken symlinks."
+    else
+        echo "No broken symbolic links found."
+    fi
+}
 
-# Обновление Homebrew
-echo "Обновляем Homebrew..."
-brew update || { echo "Ошибка: не удалось обновить Homebrew."; exit 1; }
-brew doctor || echo "Некоторые проблемы с Homebrew требуют внимания."
+# Function to update system tools
+update_system_tools() {
+    echo "Updating system tools..."
+    sudo softwareupdate --install --all || echo "Error updating system tools."
+}
 
-# Обновление пакетов
-echo "Обновляем пакеты..."
-brew upgrade || echo "Ошибка при обновлении пакетов."
+# Perform all maintenance tasks
+update_brew
+clean_caches
+clean_temp_files
+inspect_large_files
+remove_broken_symlinks
+update_system_tools
 
-# Обновление шрифтов
-echo "Проверяем устаревшие шрифты..."
-outdated_fonts=$(brew outdated --cask | grep font-)
-
-if [ -n "$outdated_fonts" ]; then
-    echo "Устаревшие шрифты найдены. Обновляем..."
-    echo "$outdated_fonts" | while read -r font; do
-        echo "Обновляем $font..."
-        brew upgrade --cask "$font" || echo "Ошибка при обновлении $font."
-    done
-else
-    echo "Все шрифты актуальны. Обновление не требуется."
-fi
-
-# Очистка старых версий
-echo "Удаляем старые версии пакетов..."
-brew cleanup -s || echo "Ошибка очистки пакетов."
-
-# Удаление битых симлинков
-echo "Проверяем битые симлинки..."
-broken_symlinks=$(find /opt/homebrew -type l ! -exec test -e {} \; -print)
-if [ -n "$broken_symlinks" ]; then
-    echo "Удаляем битые симлинки..."
-    echo "$broken_symlinks" | xargs rm -f || echo "Ошибка при удалении симлинков."
-else
-    echo "Битых симлинков не найдено."
-fi
-
-# Очистка временных файлов и кэша
-echo "Очищаем системный кэш и временные файлы..."
-find ~/Library/Caches -type f -size +50M -exec rm -f {} + || echo "Ошибка при очистке временных файлов."
-sudo find /Library/Caches -type f -size +50M -exec rm -f {} + || echo "Ошибка при очистке временных системных файлов."
-
-# Обновление инструментов Xcode
-echo "Обновляем инструменты Xcode..."
-sudo softwareupdate --install --all
-
-# Проверка больших файлов и удаление с подтверждением
-echo "Ищем большие файлы (>150MB)..."
-large_files=$(find ~/ -type f -size +150M -exec du -h {} + | sort -hr | head -n 10)
-if [ -n "$large_files" ]; then
-    echo "Найдены большие файлы:"
-    echo "$large_files"
-    echo "Запрашиваем подтверждение для удаления остальных файлов..."
-    echo "$large_files" | awk '{print $2}' | while read -r file; do
-        check_and_delete "$file"
-    done
-else
-    echo "Больших файлов не найдено."
-fi
-
-# Финальные Git-операции
-echo "Фиксируем изменения в Git..."
-git add -A && git commit -m "Автоматические изменения после обновления и очистки системы" || echo "Ошибка фиксации изменений в Git."
-
-echo "Обновление и очистка системы завершены! Лог: $LOG_FILE"
+# Calculate freed disk space
+freed_space=$(df -h | grep "/$" | awk '{print $4}')
+echo "System maintenance completed! Freed disk space: $freed_space."
+echo "Log saved to $LOG_FILE."
