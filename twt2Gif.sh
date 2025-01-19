@@ -8,16 +8,6 @@ for cmd in yt-dlp ffmpeg gifsicle; do
     fi
 done
 
-# Автоматическое обновление yt-dlp
-echo "Проверяем актуальность yt-dlp..."
-pip install --upgrade yt-dlp >/dev/null 2>&1
-if [ $? -eq 0 ]; then
-    echo "yt-dlp обновлён до последней версии."
-else
-    echo "Ошибка: не удалось обновить yt-dlp. Проверьте подключение к интернету."
-    exit 1
-fi
-
 # Проверка URL
 if [ -z "$1" ]; then
     echo "Использование: $0 <URL> [текст для GIF]"
@@ -26,12 +16,12 @@ fi
 
 URL="$1"
 TEXT="${2:-''}" # Текст по умолчанию
+TIMESTAMP=$(date +"%Y%m%d-%H%M%S")
 TEMP_DIR=$(mktemp -d)
 VIDEO_FILE="$TEMP_DIR/video.mp4"
 TRIMMED_VIDEO="$TEMP_DIR/trimmed_video.mp4"
-EXTENDED_VIDEO="$TEMP_DIR/extended_video.mp4"
 PALETTE_FILE="$TEMP_DIR/palette.png"
-OUTPUT_GIF="./$(uuidgen | head -c 8).gif"
+OUTPUT_GIF="./${TIMESTAMP}.gif"
 
 # Загрузка видео
 echo "Загружаем видео из $URL..."
@@ -49,14 +39,6 @@ if [ ! -s "$TRIMMED_VIDEO" ]; then
     echo "Ошибка: обрезанное видео пустое."
     rm -rf "$TEMP_DIR"
     exit 1
-fi
-
-# Проверка длины видео
-DURATION=$(ffprobe -i "$TRIMMED_VIDEO" -show_entries format=duration -v quiet -of csv="p=0")
-if (( $(echo "$DURATION < 1.0" | bc -l) )); then
-    echo "Видео слишком короткое ($DURATION сек). Увеличиваем длину..."
-    ffmpeg -y -stream_loop 4 -i "$TRIMMED_VIDEO" -t 2 -c:v libx264 -preset ultrafast "$EXTENDED_VIDEO"
-    TRIMMED_VIDEO="$EXTENDED_VIDEO"
 fi
 
 # Генерация палитры

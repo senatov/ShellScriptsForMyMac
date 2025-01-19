@@ -1,120 +1,118 @@
 #!/bin/zsh
 
-# Лог-файл
-LOG_FILE="$HOME/brew_update.log"
-if [[ -f $LOG_FILE && $(du -m "$LOG_FILE" | cut -f1) -gt 100 ]]; then
-    mv "$LOG_FILE" "${LOG_FILE}_$(date +%F-%H%M%S).log"
-fi
-exec > >(tee -i "$LOG_FILE") 2>&1
-
 echo "Starting full system maintenance with Homebrew under zsh..."
 
-# Проверка установки Homebrew
+# Check if Homebrew is installed
 if ! command -v brew &>/dev/null; then
-    echo "Error: Homebrew is not installed. Please install it first."
+    echo "[ERROR] Homebrew is not installed. Please install it first."
     exit 1
 fi
 
-# Обновление Homebrew
+# Update Homebrew
 update_brew() {
-    echo "Updating Homebrew..."
-    brew update || echo "Error updating Homebrew."
+    echo "[INFO] Updating Homebrew..."
+    brew update || echo "[ERROR] Error updating Homebrew."
 
-    echo "Upgrading outdated packages..."
+    echo "[INFO] Upgrading outdated packages..."
     outdated_packages=$(brew outdated)
     if [[ -n $outdated_packages ]]; then
-        brew upgrade || echo "Error upgrading packages."
+        brew upgrade || echo "[ERROR] Error upgrading packages."
     else
-        echo "No outdated packages found."
+        echo "[INFO] No outdated packages found."
     fi
 
-    echo "Cleaning up old versions..."
-    brew cleanup -s || echo "Error during cleanup."
+    echo "[INFO] Cleaning up old versions..."
+    brew cleanup -s || echo "[ERROR] Error during cleanup."
 }
 
-# Очистка кэшей
+# Clean user and system caches
 clean_caches() {
-    echo "Cleaning user caches..."
-    user_cache=$(find ~/Library/Caches -type f -size +50M)
-    if [[ -n $user_cache ]]; then
-        echo "$user_cache" | xargs rm -f || echo "Error cleaning user cache."
-    else
-        echo "No large files in user cache."
-    fi
+    echo "[INFO] Cleaning user caches..."
+    find ~/Library/Caches -type f -size +50M -print0 | xargs -0 rm -f || echo "[ERROR] Error cleaning user cache."
 
-    echo "Cleaning system caches..."
-    sudo find /Library/Caches -type f -size +50M -exec rm -f {} + 2>/dev/null || echo "Error cleaning system cache."
+    echo "[INFO] Cleaning system caches..."
+    sudo find /Library/Caches -type f -size +50M -exec rm -f {} + 2>/dev/null || echo "[ERROR] Error cleaning system cache."
 }
 
-# Удаление временных файлов
+# Clean temporary files
 clean_temp_files() {
-    echo "Cleaning temporary files..."
-    temp_files=$(find /tmp -type f -mtime +7)
-    if [[ -n $temp_files ]]; then
-        echo "$temp_files" | xargs rm -f || echo "Error removing temporary files."
-    else
-        echo "No old temporary files found."
-    fi
+    echo "[INFO] Cleaning temporary files..."
+    find /tmp -type f -mtime +7 -print0 | xargs -0 rm -f || echo "[ERROR] Error removing temporary files."
 }
 
-# Поиск и проверка больших файлов
+# Inspect large files
 inspect_large_files() {
-    echo "Inspecting large files (>150MB)..."
-    large_files=$(find ~/ -type f -size +150M -exec du -h {} + | sort -hr | head -n 10)
-
-    if [[ -n $large_files ]]; then
-        echo "Large files found:"
-        echo "$large_files"
-
-        echo "Requesting confirmation for deletion..."
-        echo "$large_files" | awk '{print $2}' | while read -r file; do
-            # Уведомление о критичных игровых файлах
-            if [[ $file == *"Wargaming.net Game Center"* ]]; then
-                echo "Warning: File $file belongs to World of Tanks and should not be deleted."
-                continue
-            fi
-
-            # Запрос подтверждения
-            print "Do you want to delete $file? (y/n): \c"
-            read confirm
-            if [[ $confirm == "y" || $confirm == "Y" ]]; then
-                rm -f "$file" && echo "$file deleted." || echo "Error deleting $file."
-            else
-                echo "$file not deleted."
-            fi
-        done
-    else
-        echo "No large files found."
-    fi
+    echo "[INFO] Inspecting large files (>150MB)..."
+    find / -type f -size +150M \
+        \( ! -path "*mac_backup*" \
+           ! -path "/System/Volumes/*" \
+           ! -path "/Library/Developer/CoreSimulator/*" ! -path "/System/Volumes/Data/Library/Developer/CoreSimulator/*" \
+        \) \
+        -exec du -h {} + 2>/dev/null | sort -hr | head -n 10
+    echo "[INFO] Done inspecting large files."
 }
 
-# Удаление битых символических ссылок
+# Remove broken symbolic links
 remove_broken_symlinks() {
-    echo "Searching for broken symbolic links..."
-    broken_symlinks=$(find / -type l ! -exec test -e {} \; -print 2>/dev/null)
-    if [[ -n $broken_symlinks ]]; then
-        echo "Broken symbolic links found. Removing..."
-        echo "$broken_symlinks" | xargs rm -f || echo "Error removing broken symlinks."
-    else
-        echo "No broken symbolic links found."
-    fi
+    echo "[INFO] Searching for broken symbolic links..."
+    find / -type l \
+        \( ! -path "/Volumes/*" \
+           ! -path "*mac_backup*" \
+           ! -path "/System/Volumes/*" \
+           ! -path "/Library/Developer/CoreSimulator/*" ! -path "/System/Volumes/Data/Library/Developer/CoreSimulator/*" \
+        \) \
+        ! -exec test -e {} \; -print 2>/dev/null | while IFS= read -r link; do
+        rm -f "$link" || echo "[ERROR] Error removing broken symlink: $link"
+    done
+    echo "[INFO] Done searching broken symbolic links."
 }
 
-# Обновление системных инструментов
+# Update system tools
 update_system_tools() {
-    echo "Updating system tools..."
-    sudo softwareupdate --install --all || echo "Error updating system tools."
+    echo "[INFO] Updating system tools..."
+    sudo softwareupdate --install --all || echo "[ERROR] Error updating system tools."
 }
 
-# Выполнение задач
+# Verify and repair disk
+verify_and_repair_disk() {
+    echo "[INFO] Verifying disk volume..."
+    diskutil verifyVolume / || echo "[ERROR] Disk verification failed."
+
+    echo "[INFO] Repairing disk volume..."
+    diskutil repairVolume / || echo "[ERROR] Disk repair failed."
+}
+
+# Analyze disk usage with ncdu
+analyze_disk_usage() {
+    echo "[INFO] Analyzing disk usage with ncdu..."
+    if ! command -v ncdu &>/dev/null; then
+        echo "[INFO] Installing ncdu..."
+        brew install ncdu || echo "[ERROR] Failed to install ncdu."
+    fi
+    ncdu /
+}
+
+# Display disk usage summary with duf
+display_disk_summary() {
+    echo "[INFO] Displaying disk usage summary with duf..."
+    if ! command -v duf &>/dev/null; then
+        echo "[INFO] Installing duf..."
+        brew install duf || echo "[ERROR] Failed to install duf."
+    fi
+    duf
+}
+
+# Execute tasks
 update_brew
 clean_caches
 clean_temp_files
 inspect_large_files
 remove_broken_symlinks
 update_system_tools
+verify_and_repair_disk
+analyze_disk_usage
+display_disk_summary
 
-# Итог
+# Final summary
 freed_space=$(df -h | grep "/$" | awk '{print $4}')
-echo "System maintenance completed! Freed disk space: $freed_space."
-echo "Log saved to $LOG_FILE."
+echo "[INFO] System maintenance completed! Freed disk space: $freed_space."
