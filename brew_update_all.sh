@@ -1,14 +1,14 @@
 #!/bin/zsh
 
-echo "Starting full system maintenance with Homebrew under zsh..."
+# Устанавливаем корректный PATH
+export PATH="/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:$PATH"
 
-# Check if Homebrew is installed
-if ! command -v brew &>/dev/null; then
-    echo "[ERROR] Homebrew is not installed. Please install it first."
-    exit 1
-fi
+# Запрашиваем root-пароль
+echo "Please enter your password to proceed with maintenance tasks:"
+sudo -v
+# Поддерживаем активность sudo
+while true; do sudo -n true; sleep 60; kill -0 "$$" || exit; done 2>/dev/null &
 
-# Update Homebrew
 update_brew() {
     echo "[INFO] Updating Homebrew..."
     brew update || echo "[ERROR] Error updating Homebrew."
@@ -25,94 +25,85 @@ update_brew() {
     brew cleanup -s || echo "[ERROR] Error during cleanup."
 }
 
-# Clean user and system caches
-clean_caches() {
-    echo "[INFO] Cleaning user caches..."
-    find ~/Library/Caches -type f -size +50M -print0 | xargs -0 rm -f || echo "[ERROR] Error cleaning user cache."
 
-    echo "[INFO] Cleaning system caches..."
-    sudo find /Library/Caches -type f -size +50M -exec rm -f {} + 2>/dev/null || echo "[ERROR] Error cleaning system cache."
+# Очистка кешей Homebrew
+clean_brew_caches() {
+    echo "[INFO] Cleaning Brew-related caches..."
+
+    # Проверяем, доступна ли brew
+    if ! command -v brew &>/dev/null; then
+        echo "[ERROR] Homebrew is not installed or not in PATH."
+        return 1
+    fi
+
+    # Выполняем очистку кешей
+    brew cleanup || echo "[ERROR] Failed to clean Brew caches."
 }
 
-# Clean temporary files
-clean_temp_files() {
-    echo "[INFO] Cleaning temporary files..."
-    find /tmp -type f -mtime +7 -print0 | xargs -0 rm -f || echo "[ERROR] Error removing temporary files."
+
+clean_temp_logs_and_caches() {
+    echo "[INFO] Cleaning temporary files, logs, and caches older than 3 days..."
+
+    # Обновлённый список директорий для очистки
+    local directories=(
+        "/tmp"
+        "/private/tmp"
+        "/Users/$USER/Library/Caches"  # Пользовательский кеш
+        "/Users/$USER/Library/Logs"   # Пользовательские логи
+   )
+
+    for dir in "${directories[@]}"; do
+        if [ -d "$dir" ]; then
+            echo "[INFO] Cleaning directory: $dir"
+            sudo find "$dir" -type f -mtime +3 -exec rm -v {} \; 2>/dev/null || echo "[WARNING] Failed to clean: $dir"
+        else
+            echo "[WARNING] Directory not found: $dir"
+        fi
+    done
+    echo "[INFO] Finished cleaning temporary files, logs, and caches."
 }
 
-# Inspect large files
-inspect_large_files() {
-    echo "[INFO] Inspecting large files (>150MB)..."
-    find / -type f -size +150M \
-        \( ! -path "*mac_backup*" \
-           ! -path "/System/Volumes/*" \
-           ! -path "/Library/Developer/CoreSimulator/*" ! -path "/System/Volumes/Data/Library/Developer/CoreSimulator/*" \
-        \) \
-        -exec du -h {} + 2>/dev/null | sort -hr | head -n 10
-    echo "[INFO] Done inspecting large files."
-}
 
-# Remove broken symbolic links
 remove_broken_symlinks() {
     echo "[INFO] Searching for broken symbolic links..."
-    find / -type l \
-        \( ! -path "/Volumes/*" \
-           ! -path "*mac_backup*" \
-           ! -path "/System/Volumes/*" \
-           ! -path "/Library/Developer/CoreSimulator/*" ! -path "/System/Volumes/Data/Library/Developer/CoreSimulator/*" \
-        \) \
-        ! -exec test -e {} \; -print 2>/dev/null | while IFS= read -r link; do
-        rm -f "$link" || echo "[ERROR] Error removing broken symlink: $link"
+
+    # Исключаем директории, которые не нужно проверять
+    local exclude_paths=(
+        "/Volumes/*"
+        "/System/*"
+        "/Library/*"
+        "/private/var/*"
+    )
+
+    # Генерация аргументов для исключения
+    local exclude_args=""
+    for path in "${exclude_paths[@]}"; do
+        exclude_args="$exclude_args ! -path '$path'"
     done
-    echo "[INFO] Done searching broken symbolic links."
+
+    # Поиск и удаление сломанных ссылок
+    eval "find / -type l $exclude_args ! -exec test -e {} \; -exec sudo rm -v {} \; 2>/dev/null" || {
+        echo "[ERROR] Issues removing broken symlinks."
+        return 1
+    }
+
+    echo "[INFO] Finished removing broken symlinks."
 }
 
-# Update system tools
-update_system_tools() {
-    echo "[INFO] Updating system tools..."
-    sudo softwareupdate --install --all || echo "[ERROR] Error updating system tools."
-}
-
-# Verify and repair disk
 verify_and_repair_disk() {
-    echo "[INFO] Verifying disk volume..."
-    diskutil verifyVolume / || echo "[ERROR] Disk verification failed."
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        echo "[INFO] Verifying disk volume..."
+        sudo diskutil verifyVolume / || echo "[ERROR] Disk verification failed."
 
-    echo "[INFO] Repairing disk volume..."
-    diskutil repairVolume / || echo "[ERROR] Disk repair failed."
-}
-
-# Analyze disk usage with ncdu
-analyze_disk_usage() {
-    echo "[INFO] Analyzing disk usage with ncdu..."
-    if ! command -v ncdu &>/dev/null; then
-        echo "[INFO] Installing ncdu..."
-        brew install ncdu || echo "[ERROR] Failed to install ncdu."
+        echo "[INFO] Repairing disk volume..."
+        sudo diskutil repairVolume / || echo "[ERROR] Disk repair failed."
+    else
+        echo "[WARNING] Disk maintenance commands are only available on macOS."
     fi
-    ncdu /
 }
 
-# Display disk usage summary with duf
-display_disk_summary() {
-    echo "[INFO] Displaying disk usage summary with duf..."
-    if ! command -v duf &>/dev/null; then
-        echo "[INFO] Installing duf..."
-        brew install duf || echo "[ERROR] Failed to install duf."
-    fi
-    duf
-}
-
-# Execute tasks
 update_brew
-clean_caches
-clean_temp_files
-inspect_large_files
+clean_brew_caches
+clean_temp_logs_and_caches
 remove_broken_symlinks
-update_system_tools
 verify_and_repair_disk
-analyze_disk_usage
-display_disk_summary
-
-# Final summary
-freed_space=$(df -h | grep "/$" | awk '{print $4}')
-echo "[INFO] System maintenance completed! Freed disk space: $freed_space."
