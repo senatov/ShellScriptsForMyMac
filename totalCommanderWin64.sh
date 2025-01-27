@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/zsh
 
 # Проверка, установлен ли Wine
 if ! command -v wine &> /dev/null; then

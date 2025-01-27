@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/zsh
 
 # Установим переменные для выходного файла и директории проекта
 OUTPUT_FILE="${1:-~/Downloads/mimi_project.zip}"

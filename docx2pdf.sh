@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/zsh
 
 # Путь к LibreOffice
 LIBREOFFICE_PATH="/Applications/LibreOffice.app/Contents/MacOS/soffice"

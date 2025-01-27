@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/zsh
 
 # Проверка, установлен ли exiftool
 if ! command -v exiftool &>/dev/null; then

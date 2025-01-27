@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/zsh
 
 # Переменные
 SERVER="smb://root:aaa@http://192.168.178.30/share"  # Замените "share" на имя папки на сервере

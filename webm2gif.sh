@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/zsh
 
 # Проверяем наличие FFmpeg
 if ! command -v ffmpeg &> /dev/null; then

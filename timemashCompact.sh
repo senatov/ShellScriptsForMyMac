@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/zsh
 
 # Лог-файл
 LOG_FILE="/var/log/time_machine_cleanup.log"
