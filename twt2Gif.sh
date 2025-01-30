@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/zsh
 
 # Проверка наличия необходимых утилит
 for cmd in yt-dlp ffmpeg gifsicle; do
@@ -23,6 +23,11 @@ TRIMMED_VIDEO="$TEMP_DIR/trimmed_video.mp4"
 PALETTE_FILE="$TEMP_DIR/palette.png"
 OUTPUT_GIF="./${TIMESTAMP}.gif"
 
+# Параметры для уменьшения размера GIF:
+FPS=10              # Меньше кадров => меньше размер файла
+SCALE_WIDTH=360     # Меньше ширина => меньше размер файла
+MAX_COLORS=128      # Меньше цветов => меньше размер файла
+
 # Загрузка видео
 echo "Загружаем видео из $URL..."
 yt-dlp -o "$VIDEO_FILE" "$URL"
@@ -32,36 +37,54 @@ if [ ! -s "$VIDEO_FILE" ]; then
     exit 1
 fi
 
-# Обрезка видео
-echo "Обрезаем видео..."
-ffmpeg -y -i "$VIDEO_FILE" -ss 00:00:00 -to 00:00:05 -c:v libx264 -preset ultrafast "$TRIMMED_VIDEO"
+# Обрезка видео (убираем аудиодорожку -an, ограничиваем по времени)
+echo "Обрезаем видео до первых 5 секунд..."
+ffmpeg -y -i "$VIDEO_FILE" -ss 00:00:00 -to 00:00:05 -an -c:v libx264 -preset ultrafast "$TRIMMED_VIDEO"
 if [ ! -s "$TRIMMED_VIDEO" ]; then
     echo "Ошибка: обрезанное видео пустое."
     rm -rf "$TEMP_DIR"
     exit 1
 fi
 
-# Генерация палитры
-echo "Генерируем палитру..."
-ffmpeg -y -i "$TRIMMED_VIDEO" -vf "fps=15,scale=480:-1:flags=lanczos,palettegen" "$PALETTE_FILE"
+# Генерация палитры (ограничиваем количество цветов)
+echo "Генерируем палитру (до $MAX_COLORS цветов)..."
+ffmpeg -y -i "$TRIMMED_VIDEO" \
+  -vf "fps=${FPS},scale=${SCALE_WIDTH}:-1:flags=lanczos,palettegen=max_colors=${MAX_COLORS}" \
+  "$PALETTE_FILE"
+
 if [ ! -s "$PALETTE_FILE" ]; then
     echo "Ошибка: не удалось создать палитру."
     rm -rf "$TEMP_DIR"
     exit 1
 fi
 
-# Создание GIF с текстом
+# Создание GIF с текстом (drawtext)
 echo "Создаём GIF с текстом..."
-ffmpeg -y -i "$TRIMMED_VIDEO" -i "$PALETTE_FILE" -lavfi "fps=15,scale=480:-1:flags=lanczos,drawtext=text='$TEXT':fontcolor=white:fontsize=24:box=1:boxcolor=black@0.5:boxborderw=5:x=(w-text_w)/2:y=h-(text_h*2):fontfile=/Library/Fonts/Arial.ttf [x];[x][1:v]paletteuse" "$OUTPUT_GIF"
+ffmpeg -y -i "$TRIMMED_VIDEO" -i "$PALETTE_FILE" -lavfi "
+  fps=${FPS},
+  scale=${SCALE_WIDTH}:-1:flags=lanczos,
+  drawtext=text='$TEXT':
+    fontcolor=white:
+    fontsize=24:
+    box=1:
+    boxcolor=black@0.5:
+    boxborderw=5:
+    x=(w-text_w)/2:
+    y=h-(text_h*2):
+    fontfile=/Library/Fonts/Arial.ttf
+  [x];
+  [x][1:v]paletteuse=dither=bayer:bayer_scale=3" \
+  "$OUTPUT_GIF"
+
 if [ ! -s "$OUTPUT_GIF" ]; then
     echo "Ошибка: не удалось создать GIF."
     rm -rf "$TEMP_DIR"
     exit 1
 fi
 
-# Оптимизация GIF
-echo "Оптимизируем GIF..."
-gifsicle --optimize=3 "$OUTPUT_GIF" -o "$OUTPUT_GIF"
+# Дополнительная оптимизация GIF
+echo "Оптимизируем GIF через gifsicle..."
+gifsicle --optimize=3 --colors ${MAX_COLORS} "$OUTPUT_GIF" -o "$OUTPUT_GIF"
 
 echo "GIF успешно создан: $OUTPUT_GIF"
 
