@@ -30,29 +30,20 @@ if ! ping -c 1 -W 3 "$IP" &> /dev/null; then
 fi
 log "✅ $IP is responding to ping!"
 
-# Run nmap scan with a timeout of 10 seconds
-log "🔍 Starting nmap scan on $IP (Timeout: 10s)"
-timeout 10 nmap -F "$IP" > scan_results.txt 2>&1 || log "⚠️ Nmap scan timed out or failed!"
-log "📄 Nmap scan completed. Results saved to scan_results.txt"
+# Run nmap scan with a timeout per port
+log "🔍 Starting per-port nmap scan on $IP (Timeout: 10s per port)"
+nmap -p- --open --max-retries 0 --script-timeout 10s --max-rtt-timeout 1000ms --scan-delay 1s "$IP" || log "⚠️ Nmap scan encountered an error!"
+log "📄 Nmap scan completed."
 
-# Resolve domain to IP
-RESOLVED_IP=$(dig +short "$IP" | head -n 1)
-if [[ -z "$RESOLVED_IP" ]]; then
-    log "⚠️ Unable to resolve $IP to an IP address."
-    exit 1
-fi
-log "🔄 Resolved $IP to $RESOLVED_IP"
-
+# Python script for getting location and ISP information
 PYTHON_SCRIPT=$(cat <<EOF
 import sys
 import requests
 
 ip = sys.argv[1]
-resolved_ip = sys.argv[2] if len(sys.argv) > 2 else ip
-
 try:
-    print(f"[INFO] Fetching IP location data for {resolved_ip}...")
-    response = requests.get(f"https://ipinfo.io/{resolved_ip}/json", timeout=10)
+    print(f"[INFO] Fetching IP location data for {ip}...")
+    response = requests.get(f"https://ipinfo.io/{ip}/json", timeout=10)
     data = response.json()
     print(f"🌍 Location: {data.get('city', 'Unknown')}, {data.get('region', 'Unknown')}, {data.get('country', 'Unknown')}")
     print(f"🏢 ISP: {data.get('org', 'Unknown')}")
@@ -63,4 +54,4 @@ except Exception as e:
 EOF
 )
 
-echo "$PYTHON_SCRIPT" | python3 - "$IP" "$RESOLVED_IP"
+echo "$PYTHON_SCRIPT" | python3 - "$IP"
