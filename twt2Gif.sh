@@ -1,5 +1,8 @@
 #!/bin/zsh
 
+setopt NO_HIST_IGNORE_SPACE  # Отключает запись в историю
+setopt HIST_NO_STORE   
+
 # Проверка наличия необходимых утилит
 for cmd in yt-dlp ffmpeg gifsicle; do
     if ! command -v "$cmd" >/dev/null 2>&1; then

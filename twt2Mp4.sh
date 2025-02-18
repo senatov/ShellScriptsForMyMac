@@ -1,5 +1,8 @@
 #!/bin/zsh
 
+setopt NO_HIST_IGNORE_SPACE  # Отключает запись в историю
+setopt HIST_NO_STORE   
+
 # Зависимости: yt-dlp, ffmpeg
 # Убедитесь, что они установлены:
 # sudo apt install ffmpeg

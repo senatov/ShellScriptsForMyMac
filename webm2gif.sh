@@ -1,5 +1,8 @@
 #!/bin/zsh
 
+setopt NO_HIST_IGNORE_SPACE  # Отключает запись в историю
+setopt HIST_NO_STORE   
+
 # Проверяем наличие FFmpeg
 if ! command -v ffmpeg &> /dev/null; then
     echo "Ошибка: FFmpeg не установлен. Установите его через пакетный менеджер (например, brew install ffmpeg)."

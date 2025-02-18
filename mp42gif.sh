@@ -1,5 +1,8 @@
 #!/bin/zsh
 
+setopt NO_HIST_IGNORE_SPACE  # Отключает запись в историю
+setopt HIST_NO_STORE   
+
 # Проверка аргументов
 if [ "$#" -ne 2 ]; then
     echo "Usage: $0 input.mp4 output.gif"
