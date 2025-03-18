@@ -7,73 +7,99 @@ export PATH="/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:$PAT
 echo "Please enter your password to proceed with maintenance tasks:"
 sudo -v
 
-# Поддерживаем активность sudo
-while true; do sudo -n true; sleep 60; kill -0 "$$" || exit; done 2>/dev/null &
+# Поддержка активности sudo
+keep_sudo_alive() {
+    while true; do sudo -n true; sleep 60; kill -0 "$$" || exit; done 2>/dev/null &
+    SUDO_PID=$!
+    trap 'kill $SUDO_PID' EXIT
+}
+keep_sudo_alive
 
 update_brew() {
     echo "[INFO] Updating Homebrew..."
+    if ! command -v brew &>/dev/null; then
+        echo "[ERROR] Homebrew not found. Skipping update."
+        return
+    fi
     brew update || echo "[ERROR] Error updating Homebrew."
 
     echo "[INFO] Upgrading outdated packages..."
-    outdated_packages=$(brew outdated)
-    if [[ -n $outdated_packages ]]; then
+    if [[ -n $(brew outdated) ]]; then
         brew upgrade || echo "[ERROR] Error upgrading packages."
     else
         echo "[INFO] No outdated packages found."
     fi
 
     echo "[INFO] Cleaning up old versions..."
-    brew cleanup -s || echo "[ERROR] Error during cleanup."
+    brew cleanup || echo "[ERROR] Error during cleanup."
 }
 
 clean_brew_caches() {
     echo "[INFO] Cleaning Brew-related caches..."
-    if ! command -v brew &>/dev/null; then
-        echo "[ERROR] Homebrew is not installed or not in PATH."
-        return 1
+    if command -v brew &>/dev/null; then
+        rm -rf "$(brew --cache)"
+        echo "[INFO] Homebrew cache cleared."
+    else
+        echo "[ERROR] Homebrew not found. Skipping cache cleanup."
     fi
-    brew cleanup || echo "[ERROR] Failed to clean Brew caches."
 }
 
-clean_old_temp_in_var_folders() {
-    echo "[INFO] Cleaning old files from /var/folders (older than 4 days)..."
+clean_temp_files() {
+    echo "[INFO] Cleaning temporary system files older than 4 days..."
     sudo find /var/folders -type f -mtime +4 -exec rm -v {} \; 2>/dev/null
     sudo find /var/folders -mindepth 1 -type d -mtime +4 -empty -exec rmdir -v {} \; 2>/dev/null
-}
 
-clean_additional_caches() {
-    echo "[INFO] Cleaning additional caches and temporary files older than 4 days..."
-
-    find ~/Library/Application\ Support/Caches/ -type f -mtime +4 -exec rm -v {} \; 2>/dev/null
-    find ~/Library/Containers/*/Data/Library/Caches/ -type f -mtime +4 -exec rm -v {} \; 2>/dev/null
     find ~/Library/Logs/DiagnosticReports/ -type f -mtime +4 -exec rm -v {} \; 2>/dev/null
-    find ~/Library/Caches/com.apple.Safari/ -type f -mtime +4 -exec rm -v {} \; 2>/dev/null
-    find ~/Library/Application\ Support/Google/Chrome/Default/Cache/ -type f -mtime +4 -exec rm -v {} \; 2>/dev/null
-    find ~/Library/Application\ Support/Firefox/Profiles/*.default-release/cache2/ -type f -mtime +4 -exec rm -v {} \; 2>/dev/null
-
-    echo "[INFO] Additional caches cleaned."
 }
 
-verify_disk() {
-    echo "[INFO] Attempting to verify/repair disk in normal mode..."
-    if ! command -v /usr/sbin/diskutil &>/dev/null; then
-        echo "[ERROR] '/usr/sbin/diskutil' not found. Skipping disk verification."
-        return 1
-    fi
-    if ! sudo /usr/sbin/diskutil verifyVolume /; then
-        echo "[ERROR] Disk verification failed. Check manually."
+clean_xcode_data() {
+    echo "[INFO] Cleaning Xcode-related directories..."
+
+    # Очистка DerivedData
+    if [ -d ~/Library/Developer/Xcode/DerivedData ] && [ "$(ls -A ~/Library/Developer/Xcode/DerivedData)" ]; then
+        rm -rf ~/Library/Developer/Xcode/DerivedData/*
+        echo "[INFO] Cleared DerivedData."
     else
-        echo "[INFO] Disk verification completed successfully."
+        echo "[INFO] No files in DerivedData to clean."
+    fi
+
+    # Очистка Xcode Previews
+    if [ -d ~/Library/Developer/Xcode/UserData/Previews ] && [ "$(ls -A ~/Library/Developer/Xcode/UserData/Previews)" ]; then
+        rm -rf ~/Library/Developer/Xcode/UserData/Previews/*
+        echo "[INFO] Cleared Xcode Previews."
+    else
+        echo "[INFO] No files in Xcode Previews to clean."
     fi
 }
 
-main() {
-    update_brew
-    clean_brew_caches
-    clean_old_temp_in_var_folders
-    clean_additional_caches
-    verify_disk
-    echo "[INFO] Maintenance tasks completed."
+clean_firefox_temp() {
+    echo "[INFO] Cleaning Firefox temporary files..."
+
+    # Определяем пути через переменные окружения
+    FIREFOX_PROFILE_DIR="${HOME}/Library/Application Support/Firefox"
+    FIREFOX_CRASH_REPORTS="${FIREFOX_PROFILE_DIR}/Crash Reports"
+
+    # Проверяем, существует ли папка и содержит ли она файлы
+    if [ -d "$FIREFOX_CRASH_REPORTS" ] && [ "$(ls -A "$FIREFOX_CRASH_REPORTS")" ]; then
+        rm -rf "$FIREFOX_CRASH_REPORTS"/*
+        echo "[INFO] Cleared Firefox crash reports."
+    else
+        echo "[INFO] No Firefox crash reports to clean."
+    fi
 }
 
-main
+clean_user_caches() {
+    echo "[INFO] Cleaning general user caches..."
+
+    find ~/Library/Containers/*/Data/Library/Caches/ -type f -mtime +4 -exec rm -v {} \; 2>/dev/null
+    find ~/Library/Caches/ -type f -mtime +4 -exec rm -v {} \; 2>/dev/null
+}
+
+# Выполнение задач
+update_brew
+clean_brew_caches
+clean_xcode_data
+clean_firefox_temp
+clean_user_caches
+
+echo "[INFO] System maintenance completed successfully!"
