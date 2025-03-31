@@ -101,5 +101,5 @@ clean_brew_caches
 clean_xcode_data
 clean_firefox_temp
 clean_user_caches
-
 echo "[INFO] System maintenance completed successfully!"
+$HOME/.oh-my-zsh/tools/upgrade.sh
