@@ -1,9 +1,7 @@
 #!/bin/zsh
 
-# Устанавливаем корректный PATH
 export PATH="/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:$PATH"
 
-# Поддерживаем sudo-сессию без повторного запроса пароля
 keep_sudo_alive() {
     while ps -p $$ > /dev/null; do
         sudo -n true
@@ -40,21 +38,7 @@ cleanup_derived_data() {
     echo "[INFO] Checking DerivedData at: $DERIVED_DATA_DIR"
 
     if [[ -d "$DERIVED_DATA_DIR" ]]; then
-        OLD_DIRS=($(find "$DERIVED_DATA_DIR" -mindepth 1 -maxdepth 1 -type d -mtime +3))
-
-        if [[ ${#OLD_DIRS[@]} -eq 0 ]]; then
-            echo "[INFO] No DerivedData directories older than 3 days. Skipping."
-        else
-            echo "[INFO] Found ${#OLD_DIRS[@]} directories to remove:"
-            for dir in "${OLD_DIRS[@]}"; do
-                echo "  $dir"
-            done
-
-            echo "[INFO] Removing old DerivedData directories..."
-            for dir in "${OLD_DIRS[@]}"; do
-                rm -rf "$dir" && echo "[INFO] Deleted: $dir" || echo "[ERROR] Failed to delete: $dir"
-            done
-        fi
+        find "$DERIVED_DATA_DIR" -mindepth 1 -maxdepth 1 -type d -mtime +3 -exec rm -rf {} \; -exec echo "[INFO] Deleted DerivedData: {}" \;
     else
         echo "[WARN] DerivedData directory not found: $DERIVED_DATA_DIR"
     fi
@@ -65,12 +49,11 @@ clean_brew_caches() {
     if command -v brew &>/dev/null; then
         BREW_CACHE=$(brew --cache)
         if [[ -n "$BREW_CACHE" && -e "$BREW_CACHE" ]]; then
-            echo "Removing: $BREW_CACHE"
             rm -rf "$BREW_CACHE"
+            echo "[INFO] Homebrew cache cleared."
         else
-            echo "Skipping: Brew cache ($BREW_CACHE) is empty or not found"
+            echo "[INFO] Brew cache ($BREW_CACHE) is empty or not found"
         fi
-        echo "[INFO] Homebrew cache cleared."
     else
         echo "[ERROR] Homebrew not found. Skipping cache cleanup."
     fi
@@ -84,21 +67,10 @@ clean_temp_files() {
 clean_user_caches() {
     echo "[INFO] Cleaning user cache directories..."
 
-    # 1. Безопасная очистка ~/Library/Caches (без Safari, Spotlight и системных)
-    CACHE_DIR="$HOME/Library/Caches"
-    if [[ -d "$CACHE_DIR" ]]; then
-        echo "[INFO] Cleaning top-level items in: $CACHE_DIR"
-        find "$CACHE_DIR" -mindepth 1 -maxdepth 1 -type d ! -name 'com.apple.*' ! -name 'mds' ! -name 'com.apple.Spotlight' -mtime +7 -exec rm -rf {} \; -exec echo "[INFO] Deleted: {}" \;
-    fi
+    find "$HOME/Library/Caches" -mindepth 1 -maxdepth 1 -type d ! -name 'com.apple.*' ! -name 'mds' ! -name 'com.apple.Spotlight' -mtime +7 -exec rm -rf {} \; -exec echo "[INFO] Deleted cache: {}" \;
 
-    # 2. Firefox
-    FIREFOX_DIR="$HOME/Library/Application Support/Firefox/Profiles"
-    if [[ -d "$FIREFOX_DIR" ]]; then
-        echo "[INFO] Cleaning Firefox cache folders..."
-        find "$FIREFOX_DIR" -type d -name 'cache2' -exec rm -rf {} \; -exec echo "[INFO] Deleted: {}" \;
-    fi
+    find "$HOME/Library/Application Support/Firefox/Profiles" -type d -name 'cache2' -exec rm -rf {} \; -exec echo "[INFO] Deleted Firefox cache: {}" \;
 
-    # 3. Другие стандартные мусорные директории
     TARGETS=(
         "$HOME/Library/Logs/DiagnosticReports"
         "$HOME/Library/Application Support/CrashReporter"
@@ -106,37 +78,36 @@ clean_user_caches() {
     )
 
     for dir in "${TARGETS[@]}"; do
-        if [[ -d "$dir" ]]; then
-            echo "[INFO] Cleaning: $dir"
-            find "$dir" -type f -mtime +7 -exec rm -v {} \; 2>/dev/null
-        else
-            echo "[WARN] Directory not found: $dir"
-        fi
+        [[ -d "$dir" ]] && find "$dir" -type f -mtime +7 -exec rm -v {} \;
     done
 }
 
 clean_simulator_data() {
     echo "[INFO] Cleaning old iOS Simulator data..."
-    if command -v xcrun &>/dev/null; then
-        SIMULATOR_DIR="$HOME/Library/Developer/CoreSimulator/Devices"
-        if [[ -d "$SIMULATOR_DIR" ]]; then
-            find "$SIMULATOR_DIR" -type d -name "data" -mtime +10 -exec rm -rf {} \; 2>/dev/null
-            echo "[INFO] Old simulator data removed."
-        else
-            echo "[WARN] Simulator directory not found."
-        fi
-    else
-        echo "[WARN] xcrun not found. Skipping simulator cleanup."
-    fi
+    SIMULATOR_DIR="$HOME/Library/Developer/CoreSimulator/Devices"
+    [[ -d "$SIMULATOR_DIR" ]] && find "$SIMULATOR_DIR" -type d -name "data" -mtime +10 -exec rm -rf {} \; && echo "[INFO] Old simulator data removed."
 }
 
-# Запускаем обновление и очистку
+extended_cleanup() {
+    echo "[INFO] Extended cleanup for macOS 15.4 caches and trash..."
+
+    find "$HOME/.Trash" -mindepth 1 -mtime +3 -exec rm -rf {} \; -exec echo "[INFO] Deleted from Trash: {}" \;
+
+    for CACHE_DIR in "$HOME/Library/Application Support/Google/Chrome" "$HOME/Library/Application Support/Microsoft Edge"; do
+        [[ -d "$CACHE_DIR" ]] && find "$CACHE_DIR" -type d -path "*Profile*/Cache" -exec find {} -mindepth 1 -mtime +3 -delete \; -exec echo "[INFO] Cleared cache in: {}" \;
+    done
+
+    for LOG_DIR in "/Library/Logs/DiagnosticReports" "/Library/Application Support/CrashReporter"; do
+        [[ -d "$LOG_DIR" ]] && find "$LOG_DIR" -mindepth 1 -mtime +3 -exec rm -rf {} + -prune -exec echo "[INFO] Deleted logs/reports older than 3 days in: $LOG_DIR" \;
+    done
+}
+
 update_brew
 cleanup_derived_data
 clean_brew_caches
 clean_temp_files
 clean_user_caches
 clean_simulator_data
+extended_cleanup
 
-# Готово
 echo "[INFO] Maintenance tasks completed."
