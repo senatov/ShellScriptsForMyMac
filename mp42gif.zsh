@@ -1,86 +1,51 @@
 #!/bin/zsh
 
-setopt NO_HIST_IGNORE_SPACE
-setopt HIST_NO_STORE
-
-# === Настройки ===
-MAX_SIZE_MB=18
-REDUCE_STEP=20
-INITIAL_FPS=12
-INITIAL_WIDTH=640
-
-# === Проверка аргументов ===
-if [ "$#" -ne 1 ]; then
-    echo "Usage: $0 input.mp4"
-    exit 1
+if [[ $# -eq 0 ]]; then
+  echo "Usage: $0 input.mp4"
+  exit 1
 fi
 
-INPUT_FILE="$1"
-
-if [ ! -f "$INPUT_FILE" ]; then
-    echo "Error: Input file '$INPUT_FILE' not found!"
-    exit 1
+input="$1"
+if [[ ! -f "$input" ]]; then
+  echo "❌ File not found: $input"
+  exit 2
 fi
 
-# === Генерация имени выходного файла ===
-TIMESTAMP=$(date "+%Y-%m-%d-%H-%M-%S")
-OUTPUT_FILE="${TIMESTAMP}.gif"
+# Имя выходного файла по дате/времени
+timestamp=$(date "+%Y%m%d_%H%M%S")
+output="./${timestamp}.gif"
+tmpdir="/tmp/mp42gif_${timestamp}"
 
-TMP_DIR=$(mktemp -d)
-PALETTE_FILE="$TMP_DIR/palette.png"
-TMP_GIF="$TMP_DIR/tmp.gif"
-FPS=$INITIAL_FPS
-WIDTH=$INITIAL_WIDTH
+mkdir -p "$tmpdir"
 
-# === Проверка размера файла в MB ===
-check_size_mb() {
-    du -m "$1" | cut -f1
+echo "🔧 Extracting frames from $input..."
+ffmpeg -hide_banner -loglevel error \
+  -i "$input" \
+  -vf "fps=15,scale=iw:-1:flags=lanczos" \
+  -c:v png -pix_fmt rgba "$tmpdir/frame_%04d.png"
+
+if [[ $? -ne 0 ]]; then
+  echo "❌ Frame extraction failed."
+  rm -rf "$tmpdir"
+  exit 3
+fi
+
+echo "🎨 Creating GIF..."
+gifski --fps 15 --quality 100 --width 800 -o "$output" "$tmpdir"/frame_*.png
+
+if [[ $? -ne 0 ]]; then
+  echo "❌ GIF creation failed."
+  rm -rf "$tmpdir"
+  exit 4
+fi
+
+echo "🧹 Cleaning up..."
+rm -rf "$tmpdir"
+
+echo "🗑 Sending original file to system Trash..."
+trash "$input" || {
+  echo "⚠️ 'trash' command not found. Install it with: brew install trash"
+  exit 5
 }
 
-# === Основная функция конвертации ===
-convert_to_gif() {
-    echo "Generating palette (FPS=$FPS, WIDTH=$WIDTH)..."
-    ffmpeg -v error -y -i "$INPUT_FILE" \
-        -vf "fps=${FPS},scale=${WIDTH}:-1:flags=lanczos,palettegen=stats_mode=full" \
-        "$PALETTE_FILE"
-
-    echo "Creating GIF..."
-    ffmpeg -v error -y -i "$INPUT_FILE" -i "$PALETTE_FILE" \
-        -lavfi "fps=${FPS},scale=${WIDTH}:-1:flags=lanczos [x]; [x][1:v] paletteuse=dither=bayer:bayer_scale=5" \
-        -loop 0 "$TMP_GIF"
-}
-
-# === Основной процесс ===
-STEP=1
-echo "Step $STEP: Initial GIF creation..."
-convert_to_gif
-CURRENT_SIZE=$(check_size_mb "$TMP_GIF")
-echo "Current GIF size: ${CURRENT_SIZE} MB"
-
-while [ "$CURRENT_SIZE" -gt "$MAX_SIZE_MB" ]; do
-    STEP=$((STEP + 1))
-    echo "Step $STEP: Reducing FPS and WIDTH by $REDUCE_STEP%..."
-
-    FPS=$(printf "%.0f" "$(echo "$FPS * (100 - $REDUCE_STEP) / 100" | bc -l)")
-    WIDTH=$(printf "%.0f" "$(echo "$WIDTH * (100 - $REDUCE_STEP) / 100" | bc -l)")
-
-    if [ "$FPS" -lt 5 ] || [ "$WIDTH" -lt 240 ]; then
-        echo "❌ Error: Cannot reduce further without significant quality loss."
-        break
-    fi
-
-    echo "Trying with FPS=$FPS, WIDTH=$WIDTH..."
-    convert_to_gif
-    CURRENT_SIZE=$(check_size_mb "$TMP_GIF")
-    echo "Current GIF size: ${CURRENT_SIZE} MB"
-done
-
-# === Завершаем ===
-if [ "$CURRENT_SIZE" -le "$MAX_SIZE_MB" ]; then
-    mv "$TMP_GIF" "$OUTPUT_FILE"
-    echo "✅ GIF successfully created: $OUTPUT_FILE (Size: ${CURRENT_SIZE} MB)"
-else
-    echo "❌ Failed to reduce GIF size below ${MAX_SIZE_MB} MB."
-fi
-
-rm -rf "$TMP_DIR"
+echo "✅ Done! Output saved to: $output"
