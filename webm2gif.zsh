@@ -1,23 +1,40 @@
 #!/bin/zsh
 
-if [[ $# -eq 0 ]]; then
-  echo "Usage: $0 input.webp"
+set -e
+
+# 🎯 Проверка аргумента
+if [[ $# -lt 1 ]]; then
+  echo "Usage: $0 <file.webp|file.webm>"
   exit 1
 fi
 
-input="$1"
-if [[ ! -f "$input" ]]; then
-  echo "❌ File not found: $input"
-  exit 2
+INPUT="$1"
+
+# Проверка существования файла
+if [[ ! -f "$INPUT" ]]; then
+  echo "❌ File not found: $INPUT"
+  exit 1
 fi
 
-timestamp=$(date "+%Y%m%d_%H%M%S")
-output="./${timestamp}.gif"
+# Расширение и базовое имя
+ext="${INPUT##*.}"
+BASENAME=$(basename "$INPUT" .$ext)
+TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+OUTFILE="./${TIMESTAMP}.gif"
 
-echo "🎨 Converting $input → $output with ImageMagick..."
-magick "$input" -coalesce -background none -alpha on "$output"
+# Проверка расширения
+if [[ "$ext" != "webm" && "$ext" != "webp" ]]; then
+  echo "❌ Unsupported input format: .$ext"
+  exit 1
+fi
 
+echo "🎨 Converting $INPUT → $OUTFILE..."
+
+# Конвертация с ffmpeg
+ffmpeg -i "$INPUT" -vf "fps=12,scale=512:-1:flags=lanczos" -c:v gif "$OUTFILE"
+
+# Удаление оригинала в корзину (macOS)
 echo "🗑 Moving original file to Trash..."
-trash "$input" || mv "$input" ~/.Trash/
+osascript -e "tell application \"Finder\" to delete POSIX file \"$(realpath "$INPUT")\""
 
-echo "✅ Done! Output saved to: $output"
+echo "✅ Done! Output saved to: $OUTFILE"
