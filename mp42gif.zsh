@@ -49,3 +49,17 @@ trash "$input" || {
 }
 
 echo "✅ Done! Output saved to: $output"
+# Путь к текущему скрипту
+SCRIPT_NAME="$(basename "$0")"
+
+# Временно отключим автосохранение истории
+setopt no_hist_save
+
+# Удалим все строки, содержащие имя скрипта, из zsh_history
+sed -i '' "/$SCRIPT_NAME/d" ~/.zsh_history
+
+# Сбросим текущую историю
+fc -p
+
+# Перечитаем историю (чтобы очистить её из памяти)
+fc -R

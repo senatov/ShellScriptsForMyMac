@@ -1,57 +1,61 @@
 #!/bin/zsh
 
+set -euo pipefail
+
 if [[ $# -eq 0 ]]; then
   echo "Usage: $0 input.tgs"
   exit 1
 fi
 
 input="$1"
-if [[ ! -f "$input" ]]; then
-  echo "❌ File not found: $input"
+
+if [[ "${input:e}" != "tgs" ]]; then
+  echo "❌ Input must be a .tgs file"
   exit 2
 fi
 
-if [[ "${input:e}" != "tgs" ]]; then
-  echo "❌ Input must be a .tgs (Telegram Lottie animation)"
+if [[ ! -f "$input" ]]; then
+  echo "❌ File not found: $input"
   exit 3
 fi
 
-# Unique output
 timestamp=$(date "+%Y%m%d_%H%M%S")
-output="./${timestamp}.gif"
+basename="${input:t:r}"
 tmpdir="/tmp/tgs2gif_${timestamp}"
 mkdir -p "$tmpdir"
 
-echo "🔧 Decompressing $input..."
-json_file="$tmpdir/animation.json"
-gzip -dc "$input" > "$json_file" || {
-  echo "❌ Failed to decompress $input"
-  exit 4
-}
+echo "🔧 Decompressing $input to animation.json..."
+zstd -d < "$input" > "$tmpdir/animation.json" || { echo "❌ Failed to decompress .tgs"; exit 4; }
 
-echo "🔧 Converting Lottie JSON to frames..."
-lottie_render_bin=$(which lottie-render || which lottie_convert.py)
+echo "🎬 Rendering MP4 with lottie_convert.py..."
+lottie_convert.py "$tmpdir/animation.json" "$tmpdir/output.mp4" --output-format video --fps 30 || { echo "❌ lottie_convert failed"; exit 5; }
 
-if [[ -z "$lottie_render_bin" ]]; then
-  echo "❌ No Lottie renderer found (need 'lottie-render' or 'lottie_convert.py')"
-  exit 5
-fi
-
-$lottie_render_bin "$json_file" "$tmpdir/frame.png" --width 512 --height 512 || {
-  echo "❌ Failed to render frames from $json_file"
+if [[ ! -f "$tmpdir/output.mp4" ]]; then
+  echo "❌ MP4 was not created"
   exit 6
-}
-
-frame_count=$(ls "$tmpdir"/frame*.png 2>/dev/null | wc -l)
-if [[ $frame_count -lt 2 ]]; then
-  echo "❌ Not enough frames rendered to create an animation ($frame_count frame)"
-  exit 7
 fi
 
-echo "🎨 Creating GIF from $frame_count frames..."
-gifski --fps 30 --quality 100 --output "$output" "$tmpdir"/frame*.png || {
-  echo "❌ GIF creation failed"
-  exit 8
-}
+outgif="${input:h}/${basename}_${timestamp}.gif"
 
-echo "✅ Done: $output"
+echo "🎞 Converting MP4 to GIF with ffmpeg..."
+ffmpeg -hide_banner -loglevel error -y -i "$tmpdir/output.mp4" -vf "scale=512:-1:flags=lanczos" "$outgif" || { echo "❌ ffmpeg failed"; exit 7; }
+
+echo "🗑 Moving original .tgs to Trash..."
+mv "$input" ~/.Trash/
+
+echo "✅ Done: $outgif"
+
+# Путь к текущему скрипту
+SCRIPT_NAME="$(basename "$0")"
+
+# Временно отключим автосохранение истории
+setopt no_hist_save
+
+# Удалим все строки, содержащие имя скрипта, из zsh_history
+sed -i '' "/$SCRIPT_NAME/d" ~/.zsh_history
+
+# Сбросим текущую историю
+fc -p
+
+# Перечитаем историю (чтобы очистить её из памяти)
+fc -R
