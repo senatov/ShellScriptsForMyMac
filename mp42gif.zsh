@@ -1,5 +1,11 @@
 #!/bin/zsh
 
+# Start a private Zsh history session so this script's commands are not recorded
+if builtin fc -p 2>/dev/null; then
+  # Ensure we restore the previous history when the script exits
+  trap 'builtin fc -P 2>/dev/null' EXIT
+fi
+
 if [[ $# -eq 0 ]]; then
   echo "Usage: $0 input.mp4"
   exit 1
@@ -49,17 +55,3 @@ trash "$input" || {
 }
 
 echo "✅ Done! Output saved to: $output"
-# Путь к текущему скрипту
-SCRIPT_NAME="$(basename "$0")"
-
-# Временно отключим автосохранение истории
-setopt no_hist_save
-
-# Удалим все строки, содержащие имя скрипта, из zsh_history
-sed -i '' "/$SCRIPT_NAME/d" ~/.zsh_history
-
-# Сбросим текущую историю
-fc -p
-
-# Перечитаем историю (чтобы очистить её из памяти)
-fc -R
