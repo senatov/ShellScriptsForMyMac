@@ -1,4 +1,6 @@
-﻿#!/bin/zsh -f
+#!/usr/bin/env zsh
+# Re-exec under zsh if started by sh due to a broken shebang/BOM
+[ -n "$ZSH_VERSION" ] || exec /usr/bin/env zsh "$0" "$@"
 
 # History isolation
 unsetopt APPEND_HISTORY
