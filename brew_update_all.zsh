@@ -39,7 +39,6 @@ PRUNE_IDE_JETBRAINS="${PRUNE_IDE_JETBRAINS:-1}"
 PRUNE_VSCODE="${PRUNE_VSCODE:-1}"
 PRUNE_XCODE_DEEP="${PRUNE_XCODE_DEEP:-1}"          # includes Previews/Docs/ModuleCache
 PRUNE_FIREFOX_EXTRAS="${PRUNE_FIREFOX_EXTRAS:-1}"  # service workers, storage caches
-AGGRESSIVE_FIND="${AGGRESSIVE_FIND:-0}"
 
 # ---------- Paths / brew ----------
 BREW_BIN=""
@@ -60,6 +59,7 @@ rm_safely() {
     rm -rf "$@" 2>/dev/null || true
   fi
 }
+
 rmdir_safely() {
   if [[ "$DRY_RUN" = "1" ]]; then
     for p in "$@"; do [[ -d "$p" ]] && echo "DRY-RUN: rmdir \"$p\""; done
@@ -68,11 +68,30 @@ rmdir_safely() {
   fi
 }
 
+# Unified find helper function
+# Usage: find_and_remove DIR DAYS [EXTRA_FIND_ARGS...]
+find_and_remove() {
+  local dir="$1"
+  local days="$2"
+  shift 2
+  
+  [[ -d "$dir" ]] || return 0
+  
+  if [[ "$DRY_RUN" = "1" ]]; then
+    find "$dir" "$@" -mtime "+$days" -print | while read -r item; do
+      echo "DRY-RUN: rm -rf \"$item\""
+    done
+  else
+    find "$dir" "$@" -mtime "+$days" -print -delete 2>/dev/null || true
+  fi
+}
+
 sudo_keepalive() {
   [[ "$KEEP_SUDO" = "1" ]] || return
   while true; do sudo -n true 2>/dev/null || true; sleep 60; done & SUDO_PID=$!
   trap '[[ -n "${SUDO_PID:-}" ]] && kill $SUDO_PID 2>/dev/null || true' EXIT
 }
+
 prompt_sudo() {
   log_i "Requesting admin privileges for certain maintenance steps..."
   if sudo -v; then sudo_keepalive; else log_w "No sudo acquired; sudo-required steps will be skipped."; fi
@@ -100,21 +119,24 @@ cleanup_derived_data() {
   local dir="$HOME/Library/Developer/Xcode/DerivedData"
   log_i "Pruning DerivedData (> ${DAYS_DERIVED_DATA}d): $dir"
   [[ -d "$dir" ]] || { log_w "DerivedData not found"; return; }
-  [[ "$AGGRESSIVE_FIND" = "1" && "$DRY_RUN" = "0" ]] && find "$dir" -mindepth 1 -maxdepth 1 -type d -mtime +$DAYS_DERIVED_DATA -depth -print -delete || find "$dir" -mindepth 1 -maxdepth 1 -type d -mtime +$DAYS_DERIVED_DATA -print -exec sh -c 'if [ "${DRY_RUN:-0}" = "1" ]; then echo "DRY-RUN: rm -rf \"$1\""; else rm -rf "$1"; fi' _ {} \;
+  find_and_remove "$dir" "$DAYS_DERIVED_DATA" -mindepth 1 -maxdepth 1 -type d
 }
+
 cleanup_xcode_archives() {
   local dir="$HOME/Library/Developer/Xcode/Archives"
   [[ -d "$dir" ]] || return
   log_i "Pruning Xcode Archives (> ${DAYS_XCODE_ARCHIVES}d): $dir"
-  [[ "$AGGRESSIVE_FIND" = "1" && "$DRY_RUN" = "0" ]] && find "$dir" -mindepth 1 -maxdepth 1 -type d -mtime +$DAYS_XCODE_ARCHIVES -depth -print -delete || find "$dir" -mindepth 1 -maxdepth 1 -type d -mtime +$DAYS_XCODE_ARCHIVES -print -exec sh -c 'if [ "${DRY_RUN:-0}" = "1" ]; then echo "DRY-RUN: rm -rf \"$1\""; else rm -rf "$1"; fi' _ {} \;
+  find_and_remove "$dir" "$DAYS_XCODE_ARCHIVES" -mindepth 1 -maxdepth 1 -type d
 }
+
 cleanup_device_support() {
   for ds in "$HOME/Library/Developer/Xcode/"{iOS,tvOS,watchOS}" DeviceSupport"; do
     [[ -d "$ds" ]] || continue
     log_i "Pruning DeviceSupport (> ${DAYS_DEVICE_SUPPORT}d): $ds"
-    [[ "$AGGRESSIVE_FIND" = "1" && "$DRY_RUN" = "0" ]] && find "$ds" -mindepth 1 -maxdepth 1 -type d -mtime +$DAYS_DEVICE_SUPPORT -depth -print -delete || find "$ds" -mindepth 1 -maxdepth 1 -type d -mtime +$DAYS_DEVICE_SUPPORT -print -exec sh -c 'if [ "${DRY_RUN:-0}" = "1" ]; then echo "DRY-RUN: rm -rf \"$1\""; else rm -rf "$1"; fi' _ {} \;
+    find_and_remove "$ds" "$DAYS_DEVICE_SUPPORT" -mindepth 1 -maxdepth 1 -type d
   done
 }
+
 cleanup_xcode_deep() {
   [[ "$PRUNE_XCODE_DEEP" = "1" ]] || return
   # SwiftPM caches
@@ -153,7 +175,7 @@ cleanup_simulators() {
   local dev="$HOME/Library/Developer/CoreSimulator/Devices"
   if [[ -d "$dev" ]]; then
     log_i "Pruning CoreSimulator data (> ${DAYS_SIMULATOR_DATA}d): $dev"
-    [[ "$AGGRESSIVE_FIND" = "1" && "$DRY_RUN" = "0" ]] && find "$dev" -type d -name "data" -mtime +$DAYS_SIMULATOR_DATA -depth -print -delete || find "$dev" -type d -name "data" -mtime +$DAYS_SIMULATOR_DATA -print -exec sh -c 'if [ "${DRY_RUN:-0}" = "1" ]; then echo "DRY-RUN: rm -rf \"$1\""; else rm -rf "$1"; fi' _ {} \;
+    find_and_remove "$dev" "$DAYS_SIMULATOR_DATA" -type d -name "data"
   fi
   if command -v xcrun &>/dev/null; then
     log_i "Deleting unavailable simulators (xcrun simctl)..."
@@ -174,7 +196,7 @@ cleanup_vscode() {
   log_i "Cleaning VS Code caches/workspaces..."
   rm_safely "$base/Cache"/**/*
   rm_safely "$base/CachedData"/**/*
-  [[ "$AGGRESSIVE_FIND" = "1" && "$DRY_RUN" = "0" ]] && find "$base/User/workspaceStorage" -mindepth 1 -maxdepth 1 -type d -mtime +$DAYS_VSCODE_WS -depth -print -delete || find "$base/User/workspaceStorage" -mindepth 1 -maxdepth 1 -type d -mtime +$DAYS_VSCODE_WS -print -exec sh -c 'if [ "${DRY_RUN:-0}" = "1" ]; then echo "DRY-RUN: rm -rf \"$1\""; else rm -rf "$1"; fi' _ {} \;
+  find_and_remove "$base/User/workspaceStorage" "$DAYS_VSCODE_WS" -mindepth 1 -maxdepth 1 -type d
 }
 
 # ---------- JetBrains / IntelliJ family ----------
@@ -194,7 +216,7 @@ cleanup_jetbrains() {
   for p in "${JB_CACHE[@]}"; do
     [[ -d "$p" ]] || continue
     log_i "Cleaning JetBrains caches: $p"
-    [[ "$AGGRESSIVE_FIND" = "1" && "$DRY_RUN" = "0" ]] && find "$p" -mindepth 1 -mtime +$DAYS_JB_CACHES -depth -print -delete || find "$p" -mindepth 1 -mtime +$DAYS_JB_CACHES -print -exec sh -c 'if [ "${DRY_RUN:-0}" = "1" ]; then echo "DRY-RUN: rm -rf \"$1\""; else rm -rf "$1"; fi' _ {} \;
+    find_and_remove "$p" "$DAYS_JB_CACHES" -mindepth 1
   done
 
   # Indexes and system folders
@@ -217,7 +239,7 @@ cleanup_jetbrains() {
   )
   for p in "${JB_LOGS[@]}"; do
     [[ -d "$p" ]] || continue
-    find "$p" -type f -mtime +$DAYS_LOGS_SYS -print -exec sh -c 'if [ "${DRY_RUN:-0}" = "1" ]; then echo "DRY-RUN: rm -f \"$1\""; else rm -f "$1"; fi' _ {} \;
+    find_and_remove "$p" "$DAYS_LOGS_SYS" -type f
   done
 }
 
@@ -226,15 +248,22 @@ clean_temp_folders() {
   log_i "Pruning temporary system folders (> ${DAYS_TMP_FOLDERS}d)..."
   sudo find /var/folders -mindepth 1 -type d -mtime +$DAYS_TMP_FOLDERS -empty -print -exec rmdir {} \; 2>/dev/null || true
 }
+
 clean_user_caches() {
   log_i "Pruning user caches (> ${DAYS_USER_CACHES}d)..."
   local C="$HOME/Library/Caches"
   if [[ -d "$C" ]]; then
-    [[ "$AGGRESSIVE_FIND" = "1" && "$DRY_RUN" = "0" ]] && find "$C" -mindepth 1 -maxdepth 1 -type d \
-      ! -name 'com.apple.*' ! -name 'mds' ! -name 'com.apple.Spotlight' \
-      -mtime +$DAYS_USER_CACHES -depth -print -delete || find "$C" -mindepth 1 -maxdepth 1 -type d \
-      ! -name 'com.apple.*' ! -name 'mds' ! -name 'com.apple.Spotlight' \
-      -mtime +$DAYS_USER_CACHES -print -exec sh -c 'if [ "${DRY_RUN:-0}" = "1" ]; then echo "DRY-RUN: rm -rf \"$1\""; else rm -rf "$1"; fi' _ {} \;
+    if [[ "$DRY_RUN" = "1" ]]; then
+      find "$C" -mindepth 1 -maxdepth 1 -type d \
+        ! -name 'com.apple.*' ! -name 'mds' ! -name 'com.apple.Spotlight' \
+        -mtime "+$DAYS_USER_CACHES" -print | while read -r item; do
+        echo "DRY-RUN: rm -rf \"$item\""
+      done
+    else
+      find "$C" -mindepth 1 -maxdepth 1 -type d \
+        ! -name 'com.apple.*' ! -name 'mds' ! -name 'com.apple.Spotlight' \
+        -mtime "+$DAYS_USER_CACHES" -print -delete 2>/dev/null || true
+    fi
   fi
   # Common app caches
   local APP_CACHE=(
@@ -322,7 +351,7 @@ clean_chromium() {
   for base in "${CHROMIUM_DIRS[@]}"; do
     [[ -d "$base" ]] || continue
     # Per-profile Cache folders older than 3 days
-    [[ "$AGGRESSIVE_FIND" = "1" && "$DRY_RUN" = "0" ]] && find "$base" -type d -path "*/Cache" -mtime +3 -depth -print -delete || find "$base" -type d -path "*/Cache" -mtime +3 -print -exec sh -c 'if [ "${DRY_RUN:-0}" = "1" ]; then echo "DRY-RUN: rm -rf \"$1\""; else rm -rf "$1"; fi' _ {} \;
+    find_and_remove "$base" 3 -type d -path "*/Cache"
     # Code Cache, GPUCache, Service Worker CacheStorage
     for p in "$base"/**/{Code\ Cache,GPUCache,Service\ Worker/CacheStorage}; do
       [[ -d "$p" ]] || continue
@@ -343,7 +372,7 @@ clean_firefox() {
     if [[ "$PRUNE_FIREFOX_EXTRAS" = "1" ]]; then
       [[ -d "$prof/startupCache" ]] && rm_safely "$prof/startupCache"/**/*
       [[ -d "$prof/shader-cache" ]] && rm_safely "$prof/shader-cache"/**/*
-      [[ -d "$prof/thumbnails" ]] && ( [[ "$AGGRESSIVE_FIND" = "1" && "$DRY_RUN" = "0" ]] && find "$prof/thumbnails" -type f -mtime +$DAYS_FIREFOX_PROFILE -print -delete || find "$prof/thumbnails" -type f -mtime +$DAYS_FIREFOX_PROFILE -print -exec sh -c 'if [ "${DRY_RUN:-0}" = "1" ]; then echo "DRY-RUN: rm -f \"$1\""; else rm -f "$1"; fi' _ {} \; )
+      [[ -d "$prof/thumbnails" ]] && find_and_remove "$prof/thumbnails" "$DAYS_FIREFOX_PROFILE" -type f
       # Service workers and storage caches
       for p in "$prof"/storage/default/*/cache; do
         [[ -d "$p" ]] || continue
@@ -375,7 +404,7 @@ clean_browser_caches() {
 # ---------- Extended cleanup ----------
 extended_cleanup() {
   log_i "Extended cleanup: Trash, crash logs, and legacy reports"
-  [[ "$AGGRESSIVE_FIND" = "1" && "$DRY_RUN" = "0" ]] && find "$HOME/.Trash" -mindepth 1 -mtime +$DAYS_TRASH -depth -print -delete || find "$HOME/.Trash" -mindepth 1 -mtime +$DAYS_TRASH -print -exec sh -c 'if [ "${DRY_RUN:-0}" = "1" ]; then echo "DRY-RUN: rm -rf \"$1\""; else rm -rf "$1"; fi' _ {} \;
+  find_and_remove "$HOME/.Trash" "$DAYS_TRASH" -mindepth 1
 
   local USER_LOGS=(
     "$HOME/Library/Logs/DiagnosticReports"
@@ -384,12 +413,18 @@ extended_cleanup() {
   )
   for dir in "${USER_LOGS[@]}"; do
     [[ -d "$dir" ]] || continue
-    [[ "$AGGRESSIVE_FIND" = "1" && "$DRY_RUN" = "0" ]] && find "$dir" -type f -mtime +$DAYS_LOGS_SYS -print -delete || find "$dir" -type f -mtime +$DAYS_LOGS_SYS -print -exec sh -c 'if [ "${DRY_RUN:-0}" = "1" ]; then echo "DRY-RUN: rm -f \"$1\""; else rm -f "$1"; fi' _ {} \;
+    find_and_remove "$dir" "$DAYS_LOGS_SYS" -type f
   done
 
   for dir in "/Library/Logs/DiagnosticReports" "/Library/Application Support/CrashReporter"; do
     [[ -d "$dir" ]] || continue
-    if [[ "$AGGRESSIVE_FIND" = "1" && "$DRY_RUN" = "0" ]]; then sudo find "$dir" -mindepth 1 -mtime +$DAYS_LOGS_SYS -depth -print -delete 2>/dev/null || true; else sudo find "$dir" -mindepth 1 -mtime +$DAYS_LOGS_SYS -print -exec sh -c 'if [ "${DRY_RUN:-0}" = "1" ]; then echo "DRY-RUN: rm -rf \"$1\""; else rm -rf "$1"; fi' _ {} \; 2>/dev/null || true; fi
+    if [[ "$DRY_RUN" = "1" ]]; then
+      sudo find "$dir" -mindepth 1 -mtime "+$DAYS_LOGS_SYS" -print 2>/dev/null | while read -r item; do
+        echo "DRY-RUN: sudo rm -rf \"$item\""
+      done
+    else
+      sudo find "$dir" -mindepth 1 -mtime "+$DAYS_LOGS_SYS" -print -delete 2>/dev/null || true
+    fi
   done
 }
 
