@@ -15,7 +15,7 @@ fc -p /dev/null
 usage() {
   echo "Usage:" >&2
   echo "  $0 <URL|local.mp4> [--crop] [--start HH:MM:SS] [--duration SECONDS] [--mute]" >&2
-  echo "                       [--cookies-from-browser Safari|Chrome|Brave|Firefox]" >&2
+  echo "   [--cookies-from-browser Safari|Chrome|Brave|Firefox]" >&2
 }
 
 # === Args ===
@@ -35,9 +35,9 @@ while [ $# -gt 0 ]; do
     --duration) shift; TRIM_DURATION="$1" ;;
     --mute) MUTE_AUDIO="yes" ;;
     --cookies-from-browser)
-      shift
-      [ -n "$1" ] || { echo "❌ Missing browser name after --cookies-from-browser"; fc -P; exit 1; }
-      COOKIES_ARG="--cookies-from-browser=$1" ;;
+  shift
+  [ -n "$1" ] || { echo "❌ Missing browser name after --cookies-from-browser"; fc -P; exit 1; }
+  COOKIES_ARG="--cookies-from-browser=$1" ;;
     -h|--help) usage; fc -P; exit 0 ;;
     *) echo "⚠️  Unknown arg: $1" ;;
   esac
@@ -73,12 +73,12 @@ if [ $IS_URL -eq 1 ]; then
 
   if [ ! -s "$RAW_MP4" ]; then
     if grep -q "You are not authorized to view this protected tweet" "$WORKDIR/yt.log" 2>/dev/null; then
-      echo "🔐 Protected tweet. Try adding: --cookies-from-browser Safari (or Chrome/Brave/Firefox)" >&2
+  echo "🔐 Protected tweet. Try adding: --cookies-from-browser Safari (or Chrome/Brave/Firefox)" >&2
     fi
     echo "⚠️  Primary download didn't produce MP4. Trying explicit format selection..."
     FMT=$(yt-dlp -F "$INPUT_ARG" ${COOKIES_ARG:+$COOKIES_ARG} 2>/dev/null | awk '/mp4/ {print $1}' | tail -n1)
     if [ -n "$FMT" ]; then
-      yt-dlp -f "$FMT" -o "$RAW_MP4" ${COOKIES_ARG:+$COOKIES_ARG} "$INPUT_ARG" || true
+  yt-dlp -f "$FMT" -o "$RAW_MP4" ${COOKIES_ARG:+$COOKIES_ARG} "$INPUT_ARG" || true
     fi
   fi
 
@@ -105,10 +105,10 @@ fi
 # === Optional crop ===
 if [[ "$CROP_ENABLED" == "yes" ]]; then
   echo "✂️  Detecting crop..."
-  CROP_FILTER=$(ffmpeg -i "$INPUT_FOR_ENC" -vf cropdetect -frames:v 120 -f null - 2>&1 |                  grep -o 'crop=[^ ]*' | sort | uniq -c | sort -nr | head -n1 | awk '{print $2}')
+  CROP_FILTER=$(ffmpeg -i "$INPUT_FOR_ENC" -vf cropdetect -frames:v 120 -f null - 2>&1 |  grep -o 'crop=[^ ]*' | sort | uniq -c | sort -nr | head -n1 | awk '{print $2}')
   if [ -n "$CROP_FILTER" ]; then
     echo "🔧 Applying crop: $CROP_FILTER"
-    ffmpeg -hide_banner -loglevel error -y -i "$INPUT_FOR_ENC" -vf "$CROP_FILTER" -c:v libx264 -preset fast -crf 20 -an "$CROPPED_MP4" &&       INPUT_FOR_ENC="$CROPPED_MP4"
+    ffmpeg -hide_banner -loglevel error -y -i "$INPUT_FOR_ENC" -vf "$CROP_FILTER" -c:v libx264 -preset fast -crf 20 -an "$CROPPED_MP4" &&   INPUT_FOR_ENC="$CROPPED_MP4"
   else
     echo "ℹ️  cropdetect produced no filter; skipping crop"
   fi
@@ -120,9 +120,9 @@ WIDTH=720
 MIN_WIDTH=320
 FPS=30
 MIN_FPS=12
-CRF=32                 # start quality for VP9
+CRF=32     # start quality for VP9
 MAX_CRF=46
-AUDIO_K=64             # Opus kbps
+AUDIO_K=64     # Opus kbps
 MIN_AUDIO_K=24
 
 encode_webm() {

@@ -17,7 +17,7 @@ fi
 ext="${INPUT##*.}"
 BASENAME=$(basename "$INPUT" .$ext)
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-OUTFILE="${HOME}/Downloads/Hahly/${BASENAME}_${TIMESTAMP}.gif"
+OUTFILE="${HOME}/Downloads/Musor/${BASENAME}_${TIMESTAMP}.gif"
 
 if [[ "$ext" != "webm" && "$ext" != "webp" ]]; then
   echo "❌ Unsupported input format: .$ext"
@@ -51,9 +51,6 @@ rm -rf "$TMPDIR"
 
 # Путь к текущему скрипту
 SCRIPT_NAME="$(basename "$0")"
-
-# Временно отключим автосохранение истории
-setopt no_hist_save
 
 # Удалим все строки, содержащие имя скрипта, из zsh_history
 sed -i '' "/$SCRIPT_NAME/d" ~/.zsh_history
