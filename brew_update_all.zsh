@@ -25,6 +25,7 @@ DAYS_DEVICE_SUPPORT=90
 DAYS_VSCODE_WS=14
 DAYS_JB_CACHES=14
 DAYS_FIREFOX_PROFILE=7
+DAYS_GENERAL_CLEANUP=1
 
 # ---------- Feature toggles ----------
 DRY_RUN="${DRY_RUN:-0}"
@@ -39,6 +40,7 @@ PRUNE_IDE_JETBRAINS="${PRUNE_IDE_JETBRAINS:-1}"
 PRUNE_VSCODE="${PRUNE_VSCODE:-1}"
 PRUNE_XCODE_DEEP="${PRUNE_XCODE_DEEP:-1}"          # includes Previews/Docs/ModuleCache
 PRUNE_FIREFOX_EXTRAS="${PRUNE_FIREFOX_EXTRAS:-1}"  # service workers, storage caches
+PRUNE_GENERAL_CLEANUP="${PRUNE_GENERAL_CLEANUP:-1}"
 
 # ---------- Paths / brew ----------
 BREW_BIN=""
@@ -428,6 +430,57 @@ extended_cleanup() {
   done
 }
 
+# ---------- General cache, log, and temporary-file cleanup ----------
+clean_old_cache_log_and_temp_files() {
+  [[ "$PRUNE_GENERAL_CLEANUP" = "1" ]] || return
+
+  local age_minutes=$((DAYS_GENERAL_CLEANUP * 24 * 60))
+  local user_directories=(
+    "$HOME/.cache"
+    "$HOME/Library/Caches"
+    "$HOME/Library/Logs"
+  )
+  local system_directories=(
+    "/private/tmp"
+    "/private/var/tmp"
+  )
+
+  log_i "Final cleanup of cache, log, and temporary files (> ${DAYS_GENERAL_CLEANUP}d)..."
+
+  local dir
+  for dir in "${user_directories[@]}"; do
+    [[ -d "$dir" ]] || continue
+    log_i "Pruning files older than ${DAYS_GENERAL_CLEANUP}d: $dir"
+    if [[ "$DRY_RUN" = "1" ]]; then
+      find "$dir" -xdev -mindepth 1 -type f -mmin "+$age_minutes" -print 2>/dev/null | while read -r item; do
+        echo "DRY-RUN: rm -f \"$item\""
+      done
+      find "$dir" -xdev -depth -mindepth 1 -type d -empty -mmin "+$age_minutes" -print 2>/dev/null | while read -r item; do
+        echo "DRY-RUN: rmdir \"$item\""
+      done
+    else
+      find "$dir" -xdev -mindepth 1 -type f -mmin "+$age_minutes" -print -delete 2>/dev/null || true
+      find "$dir" -xdev -depth -mindepth 1 -type d -empty -mmin "+$age_minutes" -print -delete 2>/dev/null || true
+    fi
+  done
+
+  for dir in "${system_directories[@]}"; do
+    [[ -d "$dir" ]] || continue
+    log_i "Pruning files older than ${DAYS_GENERAL_CLEANUP}d: $dir"
+    if [[ "$DRY_RUN" = "1" ]]; then
+      sudo find "$dir" -xdev -mindepth 1 -type f -mmin "+$age_minutes" -print 2>/dev/null | while read -r item; do
+        echo "DRY-RUN: sudo rm -f \"$item\""
+      done
+      sudo find "$dir" -xdev -depth -mindepth 1 -type d -empty -mmin "+$age_minutes" -print 2>/dev/null | while read -r item; do
+        echo "DRY-RUN: sudo rmdir \"$item\""
+      done
+    else
+      sudo find "$dir" -xdev -mindepth 1 -type f -mmin "+$age_minutes" -print -delete 2>/dev/null || true
+      sudo find "$dir" -xdev -depth -mindepth 1 -type d -empty -mmin "+$age_minutes" -print -delete 2>/dev/null || true
+    fi
+  done
+}
+
 optional_dev_caches() {
   [[ "$PRUNE_NODE_PIP" = "1" ]] || return
   if command -v npm &>/dev/null; then
@@ -471,6 +524,7 @@ main() {
   extended_cleanup
   optional_dev_caches
   optional_docker
+  clean_old_cache_log_and_temp_files
 
   log_i "Maintenance tasks completed."
 }
