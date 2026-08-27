@@ -41,6 +41,7 @@ PRUNE_VSCODE="${PRUNE_VSCODE:-1}"
 PRUNE_XCODE_DEEP="${PRUNE_XCODE_DEEP:-1}"          # includes Previews/Docs/ModuleCache
 PRUNE_FIREFOX_EXTRAS="${PRUNE_FIREFOX_EXTRAS:-1}"  # service workers, storage caches
 PRUNE_GENERAL_CLEANUP="${PRUNE_GENERAL_CLEANUP:-1}"
+PRUNE_LARGE_DISPOSABLE_DATA="${PRUNE_LARGE_DISPOSABLE_DATA:-1}"
 
 # ---------- Paths / brew ----------
 BREW_BIN=""
@@ -68,6 +69,16 @@ rmdir_safely() {
   else
     rmdir "$@" 2>/dev/null || true
   fi
+}
+
+clear_directory_contents() {
+  local dir="$1"
+  [[ -d "$dir" ]] || return 0
+
+  # (D) includes dotfiles; null_glob prevents passing a literal wildcard.
+  local -a entries=("$dir"/*(D))
+  (( ${#entries[@]} > 0 )) || return 0
+  rm_safely "${entries[@]}"
 }
 
 # Unified find helper function
@@ -277,6 +288,34 @@ clean_user_caches() {
     log_i "Cleaning app cache: $p"
     rm_safely "$p"/**/*
   done
+}
+
+# ---------- Large disposable user data ----------
+cleanup_large_disposable_data() {
+  [[ "$PRUNE_LARGE_DISPOSABLE_DATA" = "1" ]] || return
+
+  log_i "Removing downloaded iPhone/iPad restore images (*.ipsw)..."
+  local firmware_dir
+  local -a firmware_files
+  for firmware_dir in \
+    "$HOME/Library/iTunes/iPhone Software Updates" \
+    "$HOME/Library/iTunes/iPad Software Updates"; do
+    [[ -d "$firmware_dir" ]] || continue
+    firmware_files=("$firmware_dir"/*.ipsw(N))
+    (( ${#firmware_files[@]} > 0 )) && rm_safely "${firmware_files[@]}"
+  done
+
+  # These directories contain rebuildable/downloadable cache data only. Keep
+  # the roots themselves so applications can immediately recreate contents.
+  local cache_dir
+  for cache_dir in "$HOME/Library/Caches" "$HOME/.cache"; do
+    [[ -d "$cache_dir" ]] || continue
+    log_i "Clearing disposable cache contents: $cache_dir"
+    clear_directory_contents "$cache_dir"
+  done
+
+  log_i "Emptying the current user's Trash: $HOME/.Trash"
+  clear_directory_contents "$HOME/.Trash"
 }
 
 # ---------- Extra safe caches ----------
@@ -514,6 +553,7 @@ main() {
   cleanup_simulators
   clean_temp_folders
   clean_user_caches
+  cleanup_large_disposable_data
   clean_quicklook_cache
   clean_iconservices_cache
   clean_nsurlsessiond_cache
