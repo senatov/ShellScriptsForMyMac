@@ -22,7 +22,8 @@ N defaults to 10 and must be a positive integer. Files and directories are
 counted recursively inside each first-level directory; the directory itself
 is not included in its directory count. Hidden entries are included. Symbolic
 links are measured but are not followed. PATH can also be given directly after
-the file mode when the default N is desired.
+the file mode when the default N is desired. Unreadable directories are marked
+as partial; their sizes and counts are lower bounds.
 
 Examples:
   top10.zsh cpu 15
@@ -110,21 +111,34 @@ my @names = grep { $_ ne '.' && $_ ne '..' } readdir($directory);
 closedir($directory);
 
 my @rows;
+my $skipped_total = 0;
 for my $name (@names) {
-    my $path = "$root/$name";
+    my $path = $root eq '/' ? "/$name" : "$root/$name";
     my @entry = lstat($path);
     next unless @entry;
     my $is_dir = -d _;
     next if $mode ne 'size' && !$is_dir;
 
     my ($blocks, $files, $dirs) = (0, 0, 0);
+    my $skipped = 0;
     if ($is_dir) {
         my %seen;
+        local $SIG{__WARN__} = sub {
+            my ($warning) = @_;
+            if ($warning =~ /^Can't opendir\(/) {
+                ++$skipped;
+            } else {
+                warn $warning;
+            }
+        };
         find({
             no_chdir => 1,
             wanted => sub {
                 my @stat = lstat($_);
-                return unless @stat;
+                if (!@stat) {
+                    ++$skipped;
+                    return;
+                }
                 my $key = "$stat[0]:$stat[1]";
                 $blocks += $stat[12] unless $seen{$key}++;
                 return if $_ eq $path;
@@ -136,8 +150,10 @@ for my $name (@names) {
         $blocks = $entry[12];
         $files = 1 if -f _;
     }
+    $skipped_total += $skipped;
     push @rows, { name => $name, type => ($is_dir ? 'dir' : (-l $path ? 'link' : 'file')),
-                  bytes => $blocks * 512, files => $files, dirs => $dirs };
+                  bytes => $blocks * 512, files => $files, dirs => $dirs,
+                  partial => $skipped ? 'partial' : '' };
 }
 
 my $key = $mode eq 'size' ? 'bytes' : $mode;
@@ -155,12 +171,16 @@ sub readable_size {
 }
 
 printf "First-level entries in %s, ranked by %s (top %d)\n", $root, $mode, $limit;
-printf "%-5s %12s %10s %10s  %s\n", 'TYPE', 'SIZE', 'FILES', 'DIRS', 'NAME';
+printf "%-5s %12s %10s %10s %-7s  %s\n", 'TYPE', 'SIZE', 'FILES', 'DIRS', 'STATUS', 'NAME';
 for my $row (@rows[0 .. ($#rows < $limit - 1 ? $#rows : $limit - 1)]) {
     my $name = $row->{name};
     $name =~ s/([\n\r\t])/sprintf('\\x{%02X}', ord($1))/ge;
-    printf "%-5s %12s %10d %10d  %s\n", $row->{type}, readable_size($row->{bytes}),
-        $row->{files}, $row->{dirs}, $name;
+    printf "%-5s %12s %10d %10d %-7s  %s\n", $row->{type}, readable_size($row->{bytes}),
+        $row->{files}, $row->{dirs}, $row->{partial}, $name;
+}
+if ($skipped_total) {
+    printf "\nPartial results: %d directories or entries could not be read. ", $skipped_total;
+    print "Sizes and counts may be underestimated; the ranking may change with access.";
 }
 PERL
     ;;
