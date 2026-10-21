@@ -1,5 +1,5 @@
 #!/bin/zsh
-# Show top processes or summarize the first level of a directory on macOS.
+# Show top processes or rank directories on macOS.
 
 set -euo pipefail
 
@@ -13,24 +13,27 @@ Processes (PATH is not used):
   both [N]          Show both process lists
   live [N]          Refresh both lists every 2 seconds (Ctrl-C to stop)
 
-Files and directories (PATH defaults to the current directory):
-  size [N] [PATH]   First-level files and directories by disk space used
-  files [N] [PATH]  First-level directories by number of contained files
-  dirs [N] [PATH]   First-level directories by number of contained directories
+Filesystem:
+  entries [N] [PATH]  Top directories by total immediate children (default: /)
+  files [N] [PATH]    Top directories by immediate files (default: /)
+  dirs [N] [PATH]     Top directories by immediate directories (default: /)
+  size [N] [PATH]     Immediate children of PATH by recursive disk use (default: .)
 
-N defaults to 10 and must be a positive integer. Files and directories are
-counted recursively inside each first-level directory; the directory itself
-is not included in its directory count. Hidden entries are included. Symbolic
-links are measured but are not followed. PATH can also be given directly after
-the file mode when the default N is desired. Unreadable directories are marked
-as partial; their sizes and counts are lower bounds.
+N defaults to 10 and must be a positive integer. entries/files/dirs search the
+whole tree beneath PATH, excluding PATH itself, but count only each directory's
+immediate children. FILES includes links and other non-directory entries.
+Hidden entries count; symbolic links are not followed. Mounted volumes and
+macOS's duplicate /System/Volumes/Data view are not traversed when scanning /.
+Unreadable directories have unknown child counts and are excluded from the
+ranking; the report states how many were skipped. PATH can follow MODE directly.
+size keeps its existing recursive disk-usage meaning and marks partial results.
 
 Examples:
   top10.zsh cpu 15
-  top10.zsh size ~/Downloads
+  top10.zsh entries                 # OS-wide top 10, no sudo required
+  top10.zsh dirs 10 /Users/senat    # search only this subtree
+  top10.zsh files 20 /
   top10.zsh size 20 ~/Downloads
-  top10.zsh files 10 .
-  top10.zsh dirs 10 /Users
 EOF
 }
 
@@ -48,9 +51,10 @@ esac
 
 MODE="$1"
 N="${2:-10}"
-PATH_TO_SCAN="${3:-.}"
+PATH_TO_SCAN="${3:-/}"
+[[ "$MODE" == size && $# < 3 ]] && PATH_TO_SCAN=.
 
-if [[ "$MODE" == (size|files|dirs) && $# == 2 && ! "$2" =~ '^[0-9]+$' ]]; then
+if [[ "$MODE" == (size|files|dirs|entries) && $# == 2 && ! "$2" =~ '^[0-9]+$' ]]; then
   N=10
   PATH_TO_SCAN="$2"
 fi
@@ -91,7 +95,7 @@ case "$MODE" in
         ;;
     esac
     ;;
-  size|files|dirs)
+  size|files|dirs|entries)
     if (( $# > 3 )); then
       print -u2 "Too many arguments for ${MODE}."
       exit 2
@@ -104,8 +108,83 @@ case "$MODE" in
 use strict;
 use warnings;
 use File::Find;
+use Cwd qw(abs_path);
 
 my ($mode, $limit, $root) = @ARGV;
+$root = abs_path($root) // die "Cannot resolve $root: $!\n";
+
+sub display_path {
+    my ($path) = @_;
+    $path =~ s/([\n\r\t])/sprintf('\\x{%02X}', ord($1))/ge;
+    return $path;
+}
+
+if ($mode ne 'size') {
+    my @root_stat = stat($root);
+    my $root_device = $root_stat[0];
+    my @stack = ($root);
+    my %seen;
+    my @rows;
+    my $readable = 0;
+    my ($unreadable, $mounts, $duplicates, $stat_failures) = (0, 0, 0, 0);
+
+    while (@stack) {
+        my $path = pop @stack;
+        my @self = lstat($path);
+        if (!@self) { ++$stat_failures; next }
+        my $identity = "$self[0]:$self[1]";
+        if ($seen{$identity}++) { ++$duplicates; next }
+        if ($path ne $root && $self[0] != $root_device) { ++$mounts; next }
+        # Data is the second view of macOS's writable root volume. Its entries
+        # are reached through /Users, /Library, /private, and other root paths.
+        if ($root eq '/' && $path eq '/System/Volumes/Data') {
+            ++$duplicates;
+            next;
+        }
+
+        my $directory;
+        if (!opendir($directory, $path)) { ++$unreadable; next }
+        ++$readable;
+        my ($files, $dirs) = (0, 0);
+        while (defined(my $name = readdir($directory))) {
+            next if $name eq '.' || $name eq '..';
+            my $child = $path eq '/' ? "/$name" : "$path/$name";
+            my @entry = lstat($child);
+            if (!@entry) { ++$stat_failures; next }
+            if (-d _) {
+                ++$dirs;
+                push @stack, $child;
+            } else {
+                ++$files;
+            }
+        }
+        closedir($directory);
+        next if $path eq $root;
+        my $row = { path => $path, files => $files, dirs => $dirs,
+                    entries => $files + $dirs };
+        if (@rows < $limit || $row->{$mode} > $rows[-1]->{$mode} ||
+            ($row->{$mode} == $rows[-1]->{$mode} && $path lt $rows[-1]->{path})) {
+            @rows = sort { $b->{$mode} <=> $a->{$mode} || $a->{path} cmp $b->{path} }
+                (@rows, $row);
+            pop @rows if @rows > $limit;
+        }
+    }
+
+    printf "Directories beneath %s, ranked by immediate %s (top %d)\n",
+        display_path($root), $mode, $limit;
+    printf "%-8s %8s %8s  %s\n", 'TOTAL', 'DIRS', 'FILES*', 'DIRECTORY';
+    for my $row (@rows) {
+        printf "%8d %8d %8d  %s\n", $row->{entries}, $row->{dirs},
+            $row->{files}, display_path($row->{path});
+    }
+    print "* FILES includes symbolic links and other non-directory entries.\n";
+    printf "Scanned %d readable directories; %d unreadable, %d other mounts, %d duplicate views, %d vanished/unstatable entries skipped.\n",
+        $readable, $unreadable, $mounts, $duplicates, $stat_failures;
+    print "Ranking is limited to readable directories; unreadable child counts are unknown.\n"
+        if $unreadable || $stat_failures;
+    exit 0;
+}
+
 opendir(my $directory, $root) or die "Cannot read $root: $!\n";
 my @names = grep { $_ ne '.' && $_ ne '..' } readdir($directory);
 closedir($directory);
@@ -170,14 +249,15 @@ sub readable_size {
     return $index ? sprintf('%.1f %s', $bytes, $units[$index]) : "$bytes B";
 }
 
-printf "First-level entries in %s, ranked by %s (top %d)\n", $root, $mode, $limit;
-printf "%-5s %12s %10s %10s %-7s  %s\n", 'TYPE', 'SIZE', 'FILES', 'DIRS', 'STATUS', 'NAME';
+printf "Immediate children of %s, ranked by recursive disk use (top %d)\n",
+    display_path($root), $limit;
+printf "%-5s %12s %10s %10s %-7s  %s\n", 'TYPE', 'SIZE', 'FILES', 'DIRS', 'STATUS', 'PATH';
 for my $row (@rows[0 .. ($#rows < $limit - 1 ? $#rows : $limit - 1)]) {
-    my $name = $row->{name};
-    $name =~ s/([\n\r\t])/sprintf('\\x{%02X}', ord($1))/ge;
+    my $path = $root eq '/' ? "/$row->{name}" : "$root/$row->{name}";
     printf "%-5s %12s %10d %10d %-7s  %s\n", $row->{type}, readable_size($row->{bytes}),
-        $row->{files}, $row->{dirs}, $row->{partial}, $name;
+        $row->{files}, $row->{dirs}, $row->{partial}, display_path($path);
 }
+print "SIZE is allocated disk space; FILES and DIRS count nested entries recursively.\n";
 if ($skipped_total) {
     printf "\nPartial results: %d directories or entries could not be read. ", $skipped_total;
     print "Sizes and counts may be underestimated; the ranking may change with access.";
