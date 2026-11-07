@@ -19,33 +19,33 @@ usage() {
 }
 
 # === Args ===
-if [ -z "$1" ]; then usage; fc -P; exit 1; fi
-
-INPUT_ARG="$1"; shift
+INPUT_ARG=""
 CROP_ENABLED="no"
-COOKIES_ARG=""
+COOKIES_ARGS=()
 TRIM_START=""
 TRIM_DURATION=""
 MUTE_AUDIO="no"
-
-while [ $# -gt 0 ]; do
+while (( $# )); do
   case "$1" in
-    --crop) CROP_ENABLED="yes" ;;
-    --start) shift; TRIM_START="$1" ;;
-    --duration) shift; TRIM_DURATION="$1" ;;
-    --mute) MUTE_AUDIO="yes" ;;
-    --cookies-from-browser)
-  shift
-  [ -n "$1" ] || { echo "❌ Missing browser name after --cookies-from-browser"; fc -P; exit 1; }
-  COOKIES_ARG="--cookies-from-browser=$1" ;;
+    --crop) CROP_ENABLED="yes"; shift ;;
+    --mute) MUTE_AUDIO="yes"; shift ;;
+    --start|--duration|--cookies-from-browser)
+      [ $# -ge 2 ] || { echo "❌ Missing value after $1" >&2; fc -P; exit 64; }
+      option="$1"; value="$2"; shift 2
+      case "$option" in
+        --start) TRIM_START="$value" ;;
+        --duration) TRIM_DURATION="$value" ;;
+        --cookies-from-browser) COOKIES_ARGS=(--cookies-from-browser "$value") ;;
+      esac ;;
     -h|--help) usage; fc -P; exit 0 ;;
-    *) echo "⚠️  Unknown arg: $1" ;;
+    -*) echo "❌ Unknown option: $1" >&2; fc -P; exit 64 ;;
+    *) [ -z "$INPUT_ARG" ] || { echo "❌ Please pass exactly ONE input." >&2; fc -P; exit 64; }; INPUT_ARG="$1"; shift ;;
   esac
-  shift
 done
+[ -n "$INPUT_ARG" ] || { usage; fc -P; exit 64; }
 
 # === Tools check ===
-for bin in yt-dlp ffmpeg; do
+for bin in ffmpeg; do
   if ! command -v $bin >/dev/null 2>&1; then
     echo "❌ Missing $bin. Install via Homebrew: brew install $bin"
     fc -P; exit 2
@@ -54,12 +54,14 @@ done
 
 # === Filenames / workspace ===
 TS=$(date +"%Y%m%d-%H%M%S")
-WORKDIR="${TMPDIR%/}/twt2webm_${TS}"
-mkdir -p "$WORKDIR" || { echo "❌ Cannot create workdir"; fc -P; exit 3; }
+WORKDIR=$(mktemp -d "${TMPDIR:-/tmp}/twt2webm.XXXXXX") || { echo "❌ Cannot create workdir"; fc -P; exit 3; }
 RAW_MP4="$WORKDIR/raw.mp4"
-TRIMMED_MP4="$WORKDIR/trimmed.mp4"
+TRIMMED_MP4="$WORKDIR/trimmed.mkv"
 CROPPED_MP4="$WORKDIR/cropped.mp4"
 OUT_WEBM="${PWD}/${TS}.webm"
+[ ! -e "$OUT_WEBM" ] || { echo "❌ Output already exists: $OUT_WEBM" >&2; rm -rf "$WORKDIR"; fc -P; exit 73; }
+cleanup() { [ -d "$WORKDIR" ] && rm -rf "$WORKDIR"; }
+trap cleanup EXIT INT TERM HUP
 
 # === Determine input mode (URL vs local file) ===
 IS_URL=0
@@ -68,17 +70,18 @@ printf '%s' "$INPUT_ARG" | grep -qiE '^(https?|http)://|^x\.com/|^twitter\.com/'
 INPUT_FOR_ENC=""
 
 if [ $IS_URL -eq 1 ]; then
+  command -v yt-dlp >/dev/null || { echo "❌ yt-dlp is required for URL downloads." >&2; exit 69; }
   echo "📥 Downloading video from Twitter/X..."
-  yt-dlp     --no-mtime     --restrict-filenames     --merge-output-format mp4     -S "ext"     -o "$RAW_MP4"     ${COOKIES_ARG:+$COOKIES_ARG}     --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"     "$INPUT_ARG" 2>&1 | tee "$WORKDIR/yt.log"
+  yt-dlp     --no-mtime     --restrict-filenames     --merge-output-format mp4     -S "ext"     -o "$RAW_MP4"     "${COOKIES_ARGS[@]}"     --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"     "$INPUT_ARG" 2>&1 | tee "$WORKDIR/yt.log"
 
   if [ ! -s "$RAW_MP4" ]; then
     if grep -q "You are not authorized to view this protected tweet" "$WORKDIR/yt.log" 2>/dev/null; then
   echo "🔐 Protected tweet. Try adding: --cookies-from-browser Safari (or Chrome/Brave/Firefox)" >&2
     fi
     echo "⚠️  Primary download didn't produce MP4. Trying explicit format selection..."
-    FMT=$(yt-dlp -F "$INPUT_ARG" ${COOKIES_ARG:+$COOKIES_ARG} 2>/dev/null | awk '/mp4/ {print $1}' | tail -n1)
+    FMT=$(yt-dlp -F "$INPUT_ARG" "${COOKIES_ARGS[@]}" 2>/dev/null | awk '/mp4/ {print $1}' | tail -n1)
     if [ -n "$FMT" ]; then
-  yt-dlp -f "$FMT" -o "$RAW_MP4" ${COOKIES_ARG:+$COOKIES_ARG} "$INPUT_ARG" || true
+  yt-dlp -f "$FMT" -o "$RAW_MP4" "${COOKIES_ARGS[@]}" "$INPUT_ARG" || true
     fi
   fi
 
@@ -99,7 +102,16 @@ fi
 # === Optional trim ===
 if [[ -n "$TRIM_START" || -n "$TRIM_DURATION" ]]; then
   echo "✂️  Trimming input..."
-  ffmpeg -hide_banner -loglevel error -y     ${TRIM_START:+-ss "$TRIM_START"} -i "$INPUT_FOR_ENC"     ${TRIM_DURATION:+-t "$TRIM_DURATION"}     -c:v libx264 -preset veryfast -crf 18 -an "$TRIMMED_MP4" && INPUT_FOR_ENC="$TRIMMED_MP4"
+  TRIM_ARGS=()
+  [ -z "$TRIM_START" ] || TRIM_ARGS+=(-ss "$TRIM_START")
+  TRIM_ARGS+=(-i "$INPUT_FOR_ENC")
+  [ -z "$TRIM_DURATION" ] || TRIM_ARGS+=(-t "$TRIM_DURATION")
+  if [[ "$MUTE_AUDIO" == "yes" ]]; then
+    ffmpeg -hide_banner -loglevel error -nostdin -y "${TRIM_ARGS[@]}" -c:v libx264 -preset veryfast -crf 18 -an "$TRIMMED_MP4"
+  else
+    ffmpeg -hide_banner -loglevel error -nostdin -y "${TRIM_ARGS[@]}" -c:v libx264 -preset veryfast -crf 18 -c:a aac -b:a 128k "$TRIMMED_MP4"
+  fi
+  INPUT_FOR_ENC="$TRIMMED_MP4"
 fi
 
 # === Optional crop ===

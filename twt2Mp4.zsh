@@ -8,8 +8,8 @@ readonly SCRIPT_NAME="${0:t}"
 readonly USER_AGENT='Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36'
 
 function print_usage {
-	print -- "Usage: ${SCRIPT_NAME} [--crop] URL"
-	print -- "Downloads one video from X/Twitter, YouTube, LiveJournal, or another yt-dlp-supported site."
+	print -- "Usage: ${SCRIPT_NAME} [--crop] [--start TIME] [--duration SECONDS] [--cookies-from-browser BROWSER] <URL|video-file>"
+	print -- "Downloads a video from yt-dlp-supported sites or converts a local video to compatible H.264/AAC MP4."
 }
 
 function fail {
@@ -19,23 +19,24 @@ function fail {
 
 typeset input_url=''
 typeset crop_enabled=false
+typeset start_time=''
+typeset duration=''
+typeset -a cookies_args=()
 
-for argument in "$@"; do
-	case "$argument" in
-		--crop)
-			crop_enabled=true
-			;;
-		-h | --help)
-			print_usage
-			exit 0
-			;;
-		-*)
-			fail "Unknown option: $argument" 64
-			;;
-		*)
-			[[ -z "$input_url" ]] || fail "Only one URL can be processed at a time." 64
-			input_url="$argument"
-			;;
+while (( $# )); do
+	case "$1" in
+		--crop) crop_enabled=true; shift ;;
+		--start|--duration|--cookies-from-browser)
+			(( $# >= 2 )) || fail "Missing value after $1" 64
+			option="$1"; value="$2"; shift 2
+			case "$option" in
+				--start) start_time="$value" ;;
+				--duration) duration="$value" ;;
+				--cookies-from-browser) cookies_args=(--cookies-from-browser "$value") ;;
+			esac ;;
+		-h|--help) print_usage; exit 0 ;;
+		-*) fail "Unknown option: $1" 64 ;;
+		*) [[ -z "$input_url" ]] || fail "Only one input can be processed at a time." 64; input_url="$1"; shift ;;
 	esac
 done
 
@@ -44,16 +45,15 @@ if [[ -z "$input_url" ]]; then
 	exit 64
 fi
 
-for tool in ffmpeg ffprobe python3 yt-dlp; do
+for tool in ffmpeg ffprobe; do
 	command -v "$tool" >/dev/null || fail "$tool is not installed." 69
 done
 
 readonly timestamp="$(date '+%Y%m%d-%H%M%S')"
 readonly output_file="${PWD}/${timestamp}.mp4"
+[[ ! -e "$output_file" ]] || fail "Output file already exists: $output_file" 73
 readonly temporary_dir="$(mktemp -d "${TMPDIR:-/tmp}/twt2mp4.XXXXXX")"
 readonly temporary_output="${temporary_dir}/output.mp4"
-
-[[ ! -e "$output_file" ]] || fail "Output file already exists: $output_file" 73
 
 function clean_up {
 	[[ -d "$temporary_dir" ]] && rm -rf -- "$temporary_dir"
@@ -189,19 +189,26 @@ function download_with_ytdlp {
 		--merge-output-format mkv \
 		--remux-video mkv \
 		--user-agent "$USER_AGENT" \
+		"${cookies_args[@]}" \
 		--output "${temporary_dir}/source.%(ext)s" \
 		"$input_url"
 }
 
-if [[ "$input_url" == *livejournal.com* ]]; then
-	readonly source_file="${temporary_dir}/source.mkv"
-	download_livejournal "$source_file"
+if [[ "$input_url" == (http|https)://* || "$input_url" == x.com/* || "$input_url" == twitter.com/* ]]; then
+	command -v yt-dlp >/dev/null || fail "yt-dlp is required for URL downloads." 69
+	if [[ "$input_url" == *livejournal.com* ]]; then
+		command -v python3 >/dev/null || fail "python3 is required for LiveJournal downloads." 69
+		readonly source_file="${temporary_dir}/source.mkv"
+		download_livejournal "$source_file"
+	else
+		download_with_ytdlp
+		downloaded_files=("${temporary_dir}"/source.*(N))
+		(( ${#downloaded_files} == 1 )) || fail "Expected one downloaded file, found ${#downloaded_files}." 65
+		readonly source_file="${downloaded_files[1]}"
+	fi
 else
-	download_with_ytdlp
-	downloaded_files=("${temporary_dir}"/source.*(N))
-	(( ${#downloaded_files} == 1 )) ||
-		fail "Expected one downloaded file, found ${#downloaded_files}." 65
-	readonly source_file="${downloaded_files[1]}"
+	[[ -f "$input_url" ]] || fail "File not found: $input_url" 66
+	readonly source_file="$input_url"
 fi
 
 [[ -s "$source_file" ]] || fail "The video was not downloaded." 65
@@ -241,10 +248,16 @@ fi
 
 print -- "🎞️ Encoding a compatible MP4..."
 
+typeset -a trim_args
+trim_args=()
+[[ -z "$start_time" ]] || trim_args+=(-ss "$start_time")
+trim_args+=(-i "$source_file")
+[[ -z "$duration" ]] || trim_args+=(-t "$duration")
+
 ffmpeg \
 	-hide_banner \
 	-nostdin \
-	-i "$source_file" \
+	"${trim_args[@]}" \
 	-map 0:v:0 \
 	-map '0:a?' \
 	-map_metadata 0 \

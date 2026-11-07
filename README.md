@@ -53,3 +53,16 @@ scan. Run without `sudo`; inaccessible directories are counted in the summary,
 but their contents cannot be counted and may affect the ranking. `size` remains
 available for ranking the immediate children of a chosen path by recursive disk
 usage. Run `./top10.zsh --help` for the complete interface.
+
+
+### Video conversion helpers
+
+The `twt2gif.zsh`, `twt2Mp4.zsh`, and `twt2webm.zsh` scripts accept either a video URL supported by `yt-dlp` or a local video file. They support trimming with `--start` and `--duration`, automatic black-border cropping with `--crop`, and browser cookies for sites that require sign-in. GIF creation uses `gifski` when installed and falls back to FFmpeg; `--max-size MB` sets its output cap (19.5 MB by default).
+
+```zsh
+./twt2gif.zsh clip.mp4 --start 00:00:02 --duration 5 --max-size 15
+./twt2Mp4.zsh --crop https://x.com/example/status/123
+./twt2webm.zsh --cookies-from-browser Safari https://x.com/example/status/123
+```
+
+The MP4 converter outputs H.264/AAC for broad compatibility. The WebM converter uses VP9/Opus and accepts `--mute` to omit audio.
