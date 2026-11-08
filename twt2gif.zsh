@@ -16,7 +16,8 @@ crop=false
 start=''
 duration=''
 cookies=()
-max_bytes=$((19 * 1024 * 1024 + 512 * 1024))
+# MB is decimal throughout this script and README: 19.5 MB = 19,500,000 bytes.
+max_bytes=19500000
 while (( $# )); do
   case "$1" in
     --crop) crop=true; shift ;;
@@ -27,7 +28,7 @@ while (( $# )); do
         --start) start="$value" ;;
         --duration) duration="$value" ;;
         --cookies-from-browser) cookies=(--cookies-from-browser "$value") ;;
-        --max-size) [[ "$value" == <-> ]] || fail "--max-size must be a positive number of MB." 64; (( value > 0 )) || fail "--max-size must be positive." 64; max_bytes=$(( value * 1024 * 1024 )) ;;
+        --max-size) [[ "$value" == <-> ]] || fail "--max-size must be a positive whole number of MB." 64; (( value > 0 )) || fail "--max-size must be positive." 64; max_bytes=$(( value * 1000000 )) ;;
       esac ;;
     -h|--help) usage; exit 0 ;;
     -*) fail "Unknown option: $1" 64 ;;
@@ -81,7 +82,7 @@ fi
 
 # Start with dimensions and frame rate suited to the clip duration.
 seconds="$(ffprobe -v error -show_entries format=duration -of default=nw=1:nk=1 "$work" | awk '{printf "%d", $1}')"
-width=640; fps=18; quality=90
+width=640; fps=18; quality=90; colors=128
 (( seconds > 12 )) && width=400
 (( seconds > 8 && seconds <= 12 )) && width=480
 (( seconds > 0 && seconds <= 5 )) && width=720
@@ -93,17 +94,20 @@ while true; do
     gifski --quiet --output "$out" --width "$width" --fps "$fps" --quality "$quality" "$work"
   else
     print -- "🎨 Encoding GIF with FFmpeg (width=$width, fps=$fps)..."
-    ffmpeg -hide_banner -loglevel error -nostdin -y -i "$work" -filter_complex "[0:v]fps=$fps,scale=$width:-1:flags=lanczos,split[a][b];[a]palettegen=max_colors=128[p];[b][p]paletteuse=dither=sierra2_4a" -loop 0 "$out"
+    ffmpeg -hide_banner -loglevel error -nostdin -y -i "$work" -filter_complex "[0:v]fps=$fps,scale=$width:-1:flags=lanczos,split[a][b];[a]palettegen=max_colors=$colors[p];[b][p]paletteuse=dither=sierra2_4a" -loop 0 "$out"
   fi
   [[ -s "$out" ]] || fail "GIF encoding failed." 5
   bytes="$(file_size "$out")"
   print -- "📦 GIF size: $bytes bytes (limit: $max_bytes)"
   (( bytes <= max_bytes )) && break
-  if (( width > 240 )); then width=$(( width * 9 / 10 )); (( width < 240 )) && width=240
+  if (( width > 180 )); then width=$(( width * 9 / 10 )); (( width < 180 )) && width=180
   elif (( fps > 8 )); then fps=$(( fps - 2 ))
   elif command -v gifski >/dev/null 2>&1 && (( quality > 50 )); then quality=$(( quality - 10 ))
-  else print -u2 -- "⚠️ Could not reach the size limit without severe quality loss; keeping the best result."; break
+  elif ! command -v gifski >/dev/null 2>&1 && (( colors > 32 )); then colors=$(( colors - 16 ))
+  else fail "Could not encode a GIF within the ${max_bytes}-byte size limit; no oversized output was saved." 5
   fi
 done
+bytes="$(file_size "$out")"
+(( bytes <= max_bytes )) || fail "Final GIF exceeds the ${max_bytes}-byte size limit; no output was saved." 5
 mv -- "$out" "$output"
 print -- "✅ Done: $output"

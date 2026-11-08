@@ -57,7 +57,7 @@ usage. Run `./top10.zsh --help` for the complete interface.
 
 ### Video conversion helpers
 
-The `twt2gif.zsh`, `twt2Mp4.zsh`, and `twt2webm.zsh` scripts accept either a video URL supported by `yt-dlp` or a local video file. They support trimming with `--start` and `--duration`, automatic black-border cropping with `--crop`, and browser cookies for sites that require sign-in. GIF creation uses `gifski` when installed and falls back to FFmpeg; `--max-size MB` sets its output cap (19.5 MB by default).
+The `twt2gif.zsh`, `twt2Mp4.zsh`, and `twt2webm.zsh` scripts accept either a video URL supported by `yt-dlp` or a local video file. They support trimming with `--start` and `--duration`, automatic black-border cropping with `--crop`, and browser cookies for sites that require sign-in. GIF creation uses `gifski` when installed and falls back to FFmpeg; `--max-size MB` sets its output cap (19.5 MB by default, using decimal MB: 19,500,000 bytes). The GIF script keeps reducing dimensions, frame rate, and encoder quality/palette size until the file fits, and reports an error instead of saving an oversized GIF if it cannot meet the cap.
 
 ```zsh
 ./twt2gif.zsh clip.mp4 --start 00:00:02 --duration 5 --max-size 15
